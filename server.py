@@ -11,9 +11,9 @@ Safety model:
 Credentials go in a .env file next to this script (see .env.example).
 """
 
-import concurrent.futures
 import difflib
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -42,9 +42,6 @@ _load_env()
 mcp = FastMCP("iqoption")
 
 _client: Any = None
-# The library's blocking calls can busy-wait forever if a reply is lost; each
-# call runs on a pool thread with a timeout so the server itself never hangs.
-_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
 
 class IQError(Exception):
@@ -52,14 +49,29 @@ class IQError(Exception):
 
 
 def _call(fn, *args, timeout: float = CALL_TIMEOUT, **kwargs):
-    future = _pool.submit(fn, *args, **kwargs)
-    try:
-        return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
+    # The library's blocking calls can busy-wait forever if a reply is lost;
+    # each call runs on a daemon thread with a hard timeout so neither the
+    # request nor process shutdown can hang on a stuck call.
+    box: dict = {}
+    done = threading.Event()
+
+    def runner():
+        try:
+            box["value"] = fn(*args, **kwargs)
+        except Exception as exc:
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=runner, daemon=True).start()
+    if not done.wait(timeout):
         raise IQError(
             f"IQ Option did not answer within {timeout}s. The connection may be "
             "stale - run iq_connect to reconnect and try again."
         )
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
 
 
 def _get_client():
