@@ -3,3 +3,6 @@
 vendor/
 __pycache__/
 *.pyc
+market.duckdb
+journal.db
+signals_out/

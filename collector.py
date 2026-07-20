@@ -1,11 +1,13 @@
 """Historical candle and payout collector.
 
 Collects paginated candle history and prospective payout snapshots into
-SQLite (market_data.db). Datasets are immutable: every collection run creates
-a new tagged dataset row (asset, timeframe, collection time, source) and its
-candles are never updated afterwards. Payouts cannot be reconstructed
-historically, so snapshots are taken prospectively - any simulation over
-periods without snapshots must state its assumed payout explicitly.
+DuckDB (market.duckdb, see storage.py). Datasets are immutable: every
+collection run creates a new tagged dataset row (asset, timeframe, collection
+time, source) and its candles are never updated afterwards. Every dataset
+must pass Pandera validation (validation.py) before it is stored. Payouts
+cannot be reconstructed historically, so snapshots are taken prospectively -
+any simulation over periods without snapshots must state its assumed payout
+explicitly.
 
 Pure helpers (plan_pages / dedupe_candles / find_gaps / normalize_candle)
 have no network or clock dependencies and are unit-tested.
@@ -17,49 +19,10 @@ Usage:
 
 import argparse
 import json
-import sqlite3
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent / "market_data.db"
 PAGE_SIZE = 1000  # broker maximum per get_candles request
-SOURCE = "iqoptionapi-websocket"
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS datasets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asset TEXT NOT NULL,
-    interval_seconds INTEGER NOT NULL,
-    collected_at_utc TEXT NOT NULL,
-    source TEXT NOT NULL,
-    start_ts INTEGER,
-    end_ts INTEGER,
-    candle_count INTEGER NOT NULL,
-    gap_count INTEGER NOT NULL,
-    gaps TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS candles (
-    dataset_id INTEGER NOT NULL REFERENCES datasets(id),
-    from_ts INTEGER NOT NULL,
-    to_ts INTEGER NOT NULL,
-    open REAL NOT NULL,
-    high REAL NOT NULL,
-    low REAL NOT NULL,
-    close REAL NOT NULL,
-    volume REAL,
-    UNIQUE (dataset_id, from_ts)
-);
-CREATE TABLE IF NOT EXISTS payout_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts_utc TEXT NOT NULL,
-    ts_epoch INTEGER NOT NULL,
-    asset TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    payout REAL NOT NULL,
-    source TEXT NOT NULL
-);
-"""
 
 
 # ---------------- pure helpers ----------------
@@ -115,63 +78,6 @@ def find_gaps(candles: list[dict], interval: int) -> list[dict]:
     return gaps
 
 
-# ---------------- storage ----------------
-
-def open_db(path: Path = DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
-    conn.executescript(SCHEMA)
-    conn.commit()
-    return conn
-
-
-def store_dataset(conn, asset: str, interval: int, candles: list[dict], gaps: list[dict]) -> int:
-    cursor = conn.execute(
-        """INSERT INTO datasets (asset, interval_seconds, collected_at_utc, source,
-               start_ts, end_ts, candle_count, gap_count, gaps)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            asset,
-            interval,
-            datetime.now(timezone.utc).isoformat(),
-            SOURCE,
-            candles[0]["from_ts"] if candles else None,
-            candles[-1]["to_ts"] if candles else None,
-            len(candles),
-            len(gaps),
-            json.dumps(gaps),
-        ),
-    )
-    dataset_id = cursor.lastrowid
-    conn.executemany(
-        """INSERT OR IGNORE INTO candles
-           (dataset_id, from_ts, to_ts, open, high, low, close, volume)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            (dataset_id, c["from_ts"], c["to_ts"], c["open"], c["high"], c["low"], c["close"], c["volume"])
-            for c in candles
-        ],
-    )
-    conn.commit()
-    return dataset_id
-
-
-def store_payout_snapshot(conn, profits: dict) -> int:
-    now = datetime.now(timezone.utc)
-    rows = [
-        (now.isoformat(), int(now.timestamp()), asset, kind, float(payout), SOURCE)
-        for asset, kinds in profits.items()
-        for kind, payout in kinds.items()
-        if isinstance(payout, (int, float))
-    ]
-    conn.executemany(
-        """INSERT INTO payout_snapshots (ts_utc, ts_epoch, asset, kind, payout, source)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        rows,
-    )
-    conn.commit()
-    return len(rows)
-
-
 # ---------------- live collection ----------------
 
 def _connect_client():
@@ -190,6 +96,11 @@ def _connect_client():
 
 
 def collect_candles(asset: str, interval: int, hours: float) -> dict:
+    import pandas as pd
+
+    from storage import open_db, store_dataset
+    from validation import validate_candles
+
     client, _call = _connect_client()
     end_ts = time.time()
     raw: list[dict] = []
@@ -201,6 +112,9 @@ def collect_candles(asset: str, interval: int, hours: float) -> dict:
     candles = [c for c in dedupe_candles(raw) if c["from_ts"] >= cutoff and c["to_ts"] <= end_ts]
     gaps = find_gaps(candles, interval)
 
+    # Validation failure aborts the run - a bad dataset must never be stored.
+    validate_candles(pd.DataFrame(candles), interval)
+
     conn = open_db()
     dataset_id = store_dataset(conn, asset, interval, candles, gaps)
     return {
@@ -209,12 +123,15 @@ def collect_candles(asset: str, interval: int, hours: float) -> dict:
         "interval_seconds": interval,
         "candles": len(candles),
         "gaps": len(gaps),
+        "gap_detail": gaps,
         "start_utc": datetime.fromtimestamp(candles[0]["from_ts"], timezone.utc).isoformat() if candles else None,
         "end_utc": datetime.fromtimestamp(candles[-1]["to_ts"], timezone.utc).isoformat() if candles else None,
     }
 
 
 def collect_payouts() -> dict:
+    from storage import open_db, store_payout_snapshot
+
     client, _call = _connect_client()
     profits = _call(client.get_all_profit, timeout=90)
     conn = open_db()
