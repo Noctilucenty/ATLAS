@@ -50,7 +50,7 @@ def test_script_completes_and_logs_a_full_cycle(tmp_path):
     assert "=== cycle " in log
     assert "STUB python collector.py candles EURUSD EURUSD-OTC" in log
     assert "STUB python collector.py payouts" in log
-    assert "STUB python health_report.py" in log
+    assert "STUB python health_report.py --current-cycle-status 0" in log
     assert "=== cycle exit status: 0 ===" in log
 
 
@@ -60,6 +60,8 @@ def test_collector_failure_propagates_to_launchd(tmp_path):
     log = (tmp_path / "logs" / "collector.log").read_text()
     assert result.returncode != 0
     assert "=== cycle exit status: 1 ===" in log
+    # The health report must see THIS cycle's failure, not last cycle's.
+    assert "STUB python health_report.py --current-cycle-status 1" in log
 
 
 def test_script_never_assigns_zsh_reserved_status_variable():

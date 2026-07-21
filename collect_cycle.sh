@@ -18,7 +18,9 @@ cycle_status=0
   .venv/bin/python collector.py payouts || cycle_status=1
   # Monitoring only: the health report (logs/health.json) never changes the
   # cycle exit status - LastExitStatus stays a pure collection-health signal.
-  .venv/bin/python health_report.py || true
+  # The current status is passed explicitly because this cycle's status line
+  # is appended below, AFTER the report runs.
+  .venv/bin/python health_report.py --current-cycle-status $cycle_status || true
   echo "=== cycle exit status: $cycle_status ==="
 } >> logs/collector.log 2>&1
 exit $cycle_status
