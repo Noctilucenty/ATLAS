@@ -61,12 +61,21 @@ def latest_run_dir(root: Path = RUNS_DIR) -> Path:
 
 
 def verify_bundle(run_dir: Path) -> dict:
-    """Check every artifact against the manifest hashes; abort on mismatch."""
+    """Check every artifact against the manifest hashes; abort on mismatch.
+
+    Covers candles, signals, folds AND the MIDAS binary that will execute the
+    replay - if the engine changed since the bundle was written, its replay
+    semantics may differ and the bundle must be regenerated, not reused."""
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"{run_dir} has no manifest.json - not a run bundle")
     manifest = json.loads(manifest_path.read_text())
-    for name, key in (("candles.json", "candles_sha256"), ("signals.json", "signals_sha256")):
+    artifacts = (
+        ("candles.json", "candles_sha256"),
+        ("signals.json", "signals_sha256"),
+        ("folds.json", "folds_sha256"),
+    )
+    for name, key in artifacts:
         path = run_dir / name
         if not path.exists():
             raise SystemExit(f"ABORT: {run_dir}/{name} is missing")
@@ -77,6 +86,15 @@ def verify_bundle(run_dir: Path) -> dict:
                 f"ABORT: {name} hash {actual[:16]} != manifest {str(expected)[:16]} - "
                 "stale or tampered bundle; regenerate with train.py"
             )
+
+    expected_binary = manifest.get("midas_binary_sha256")
+    actual_binary = hashlib.sha256(midas_bin().read_bytes()).hexdigest()
+    if actual_binary != expected_binary:
+        raise SystemExit(
+            f"ABORT: MIDAS binary hash {actual_binary[:16]} != bundled "
+            f"{str(expected_binary)[:16]} - the engine changed since this bundle "
+            "was written; regenerate with train.py"
+        )
     return manifest
 
 

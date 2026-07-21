@@ -124,3 +124,28 @@ def test_all_failed_semantics():
     assert all_failed([ok, bad]) is False   # partial failure is not total failure
     assert all_failed([ok]) is False
     assert all_failed([]) is False          # nothing requested != failure
+
+def test_exit_codes_distinguish_partial_and_total_failure():
+    from collector import exit_code_for
+
+    ok = {"dataset_id": 1, "asset": "EURUSD"}
+    bad = {"asset": "EURUSD-OTC", "error": "TimeoutError: x"}
+    assert exit_code_for([ok, ok]) == 0
+    assert exit_code_for([ok, bad]) == 2    # partial failure MUST be nonzero
+    assert exit_code_for([bad, bad]) == 1
+    assert exit_code_for([]) == 0
+
+def test_payout_snapshot_health_requires_every_quote_key():
+    from collector import missing_required_payouts
+
+    healthy = {"EURUSD-op": {"turbo": 0.83, "binary": 0.88}, "EURUSD-OTC": {"turbo": 0.86}}
+    assert missing_required_payouts(healthy) == []
+    # Hundreds of rows without the required keys is still unhealthy.
+    assert missing_required_payouts({"GBPAUD-op": {"binary": 0.87}}) == [
+        "EURUSD-OTC/turbo",
+        "EURUSD-op/turbo",
+    ]
+    # Wrong kind under the right key does not count.
+    assert "EURUSD-op/turbo" in missing_required_payouts(
+        {"EURUSD-op": {"binary": 0.88}, "EURUSD-OTC": {"turbo": 0.86}}
+    )

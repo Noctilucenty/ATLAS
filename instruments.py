@@ -44,6 +44,23 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
 }
 
 
+def verify_contract(manifest: dict, *, expiry_seconds: int, order_active: str) -> None:
+    """Refuse execution when the executor's contract differs from the one the
+    bundle was backtested on. A model validated on 5-minute expiries says
+    nothing about 1-minute contracts - the mismatch must be a hard error,
+    never a silent substitution."""
+    contract = manifest.get("contract") or {}
+    if (
+        contract.get("expiry_seconds") != expiry_seconds
+        or contract.get("order_active") != order_active
+    ):
+        raise ValueError(
+            "executor contract mismatch: bundle was validated on "
+            f"{contract}, executor wants expiry_seconds={expiry_seconds}, "
+            f"order_active='{order_active}'"
+        )
+
+
 def get_instrument(asset: str) -> InstrumentSpec:
     try:
         return INSTRUMENTS[asset]

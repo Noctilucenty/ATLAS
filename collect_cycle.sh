@@ -4,15 +4,18 @@
 # plus a prospective payout snapshot. Broker key mapping lives in
 # instruments.py (spot binaries quote under EURUSD-op; OTC under EURUSD-OTC).
 # Scheduled hourly by ~/Library/LaunchAgents/com.atlas.iqoption-collector.plist
-# Exits nonzero if candle collection stored nothing or the payout snapshot
-# failed, so launchd's LastExitStatus reflects real collection health.
+# Exits nonzero on ANY failure - partial candle failure, total failure, or a
+# payout snapshot missing a required quote key - so launchd's LastExitStatus
+# reflects real collection health.
+# NOTE: `status` is a READ-ONLY special parameter in zsh; assigning it kills
+# the script instantly. Never name a variable `status` here.
 cd "$(dirname "$0")"
 mkdir -p logs
-status=0
+cycle_status=0
 {
   echo "=== cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
-  .venv/bin/python collector.py candles EURUSD EURUSD-OTC --interval 60 --hours 2 || status=1
-  .venv/bin/python collector.py payouts || status=1
-  echo "=== cycle exit status: $status ==="
+  .venv/bin/python collector.py candles EURUSD EURUSD-OTC --interval 60 --hours 2 || cycle_status=1
+  .venv/bin/python collector.py payouts || cycle_status=1
+  echo "=== cycle exit status: $cycle_status ==="
 } >> logs/collector.log 2>&1
-exit $status
+exit $cycle_status

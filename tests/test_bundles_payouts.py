@@ -92,38 +92,85 @@ def make_result() -> dict:
     return {
         "signals": [{"timestamp": "2026-07-21T00:00:00Z", "action": "no_trade", "note": "fold=0"}],
         "folds": [{"fold": 0}],
-        "manifest": {"experiment_id": 7, "payout_source": "assumed"},
+        "manifest": {"experiment_id": 7, "payout_source": "assumed", "expiry_seconds": 300},
     }
 
-def test_bundle_roundtrip_verifies(tmp_path):
-    candles = [{"timestamp": "2026-07-21T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0}]
-    run_dir = write_run_bundle(tmp_path, "EURUSD", candles, make_result())
+
+CANDLE = {"timestamp": "2026-07-21T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0}
+
+
+@pytest.fixture
+def fake_midas(monkeypatch, tmp_path):
+    """A stand-in MIDAS binary so bundle and verify hash the same file."""
+    binary = tmp_path / "fake-midas-binary"
+    binary.write_bytes(b"engine-v1")
+    monkeypatch.setenv("MIDAS_BIN", str(binary))
+    return binary
+
+
+def test_bundle_roundtrip_verifies(tmp_path, fake_midas):
+    run_dir = write_run_bundle(tmp_path, "EURUSD", [CANDLE], make_result())
     assert run_dir.exists() and not run_dir.name.startswith(".tmp")
     manifest = verify_bundle(run_dir)  # must not raise
     assert manifest["experiment_id"] == 7
-    assert manifest["candles_sha256"] and manifest["signals_sha256"]
+    assert manifest["candles_sha256"] and manifest["signals_sha256"] and manifest["folds_sha256"]
+    assert manifest["midas_binary_sha256"]
+    # The exact backtested contract travels with the bundle.
+    assert manifest["contract"] == {
+        "asset": "EURUSD",
+        "order_active": "EURUSD",
+        "option_kind": "turbo",
+        "expiry_seconds": 300,
+    }
 
-def test_tampered_candles_abort_backtest(tmp_path):
-    candles = [{"timestamp": "2026-07-21T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0}]
-    run_dir = write_run_bundle(tmp_path, "EURUSD", candles, make_result())
+def test_tampered_candles_abort_backtest(tmp_path, fake_midas):
+    run_dir = write_run_bundle(tmp_path, "EURUSD", [CANDLE], make_result())
     stale = json.loads((run_dir / "candles.json").read_text())
     stale[0]["close"] = 9.9
     (run_dir / "candles.json").write_text(json.dumps(stale))
     with pytest.raises(SystemExit, match="stale or tampered"):
         verify_bundle(run_dir)
 
-def test_tampered_signals_abort_backtest(tmp_path):
-    candles = [{"timestamp": "2026-07-21T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0}]
-    run_dir = write_run_bundle(tmp_path, "EURUSD", candles, make_result())
+def test_tampered_signals_abort_backtest(tmp_path, fake_midas):
+    run_dir = write_run_bundle(tmp_path, "EURUSD", [CANDLE], make_result())
     (run_dir / "signals.json").write_text("[]")
     with pytest.raises(SystemExit, match="stale or tampered"):
         verify_bundle(run_dir)
 
-def test_no_tmp_dir_left_behind(tmp_path):
-    candles = [{"timestamp": "2026-07-21T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 0}]
-    write_run_bundle(tmp_path, "EURUSD", candles, make_result())
+def test_tampered_folds_abort_backtest(tmp_path, fake_midas):
+    run_dir = write_run_bundle(tmp_path, "EURUSD", [CANDLE], make_result())
+    (run_dir / "folds.json").write_text("[]")
+    with pytest.raises(SystemExit, match="stale or tampered"):
+        verify_bundle(run_dir)
+
+def test_changed_midas_binary_aborts_replay(tmp_path, fake_midas):
+    run_dir = write_run_bundle(tmp_path, "EURUSD", [CANDLE], make_result())
+    fake_midas.write_bytes(b"engine-v2-different-semantics")
+    with pytest.raises(SystemExit, match="engine changed"):
+        verify_bundle(run_dir)
+
+def test_no_tmp_dir_left_behind(tmp_path, fake_midas):
+    write_run_bundle(tmp_path, "EURUSD", [CANDLE], make_result())
     leftovers = [p for p in (tmp_path / "EURUSD").iterdir() if p.name.startswith(".tmp")]
     assert leftovers == []
+
+
+# ---------------- contract binding ----------------
+
+def test_contract_verification_rejects_mismatched_executor():
+    from instruments import verify_contract
+
+    manifest = {
+        "contract": {"asset": "EURUSD", "order_active": "EURUSD",
+                     "option_kind": "turbo", "expiry_seconds": 300}
+    }
+    verify_contract(manifest, expiry_seconds=300, order_active="EURUSD")  # ok
+    with pytest.raises(ValueError, match="contract mismatch"):
+        verify_contract(manifest, expiry_seconds=60, order_active="EURUSD")
+    with pytest.raises(ValueError, match="contract mismatch"):
+        verify_contract(manifest, expiry_seconds=300, order_active="EURUSD-OTC")
+    with pytest.raises(ValueError, match="contract mismatch"):
+        verify_contract({}, expiry_seconds=300, order_active="EURUSD")
 
 
 # ---------------- campaign accounting ----------------

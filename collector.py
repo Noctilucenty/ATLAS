@@ -85,6 +85,34 @@ def all_failed(results: list[dict]) -> bool:
     return bool(results) and all("error" in r for r in results)
 
 
+def exit_code_for(results: list[dict]) -> int:
+    """Health exit code for a candle collection: 0 = every asset stored,
+    2 = partial failure (some assets failed), 1 = total failure. A partial
+    failure MUST be nonzero, or one market can silently stop collecting
+    forever while launchd keeps reporting success."""
+    if all_failed(results):
+        return 1
+    if any("error" in r for r in results):
+        return 2
+    return 0
+
+
+def missing_required_payouts(profits: dict) -> list[str]:
+    """Required quote keys absent from a payout snapshot.
+
+    Every instrument we trade or model must have its (quote_key, option_kind)
+    present - a snapshot with hundreds of rows that lacks EURUSD-op/turbo is
+    unhealthy no matter how large payout_rows is."""
+    from instruments import INSTRUMENTS
+
+    required = sorted({(s.quote_key, s.option_kind) for s in INSTRUMENTS.values()})
+    return [
+        f"{key}/{kind}"
+        for key, kind in required
+        if not isinstance(profits.get(key, {}).get(kind), (int, float))
+    ]
+
+
 # ---------------- live collection ----------------
 
 def _connect_client():
@@ -154,10 +182,10 @@ def collect_payouts() -> dict:
     from storage import open_db, store_payout_snapshot
 
     client, _call = _connect_client()
-    profits = _call(client.get_all_profit, timeout=90)
+    profits = {a: dict(k) for a, k in _call(client.get_all_profit, timeout=90).items()}
     conn = open_db()
-    count = store_payout_snapshot(conn, {a: dict(k) for a, k in profits.items()})
-    return {"payout_rows": count}
+    count = store_payout_snapshot(conn, profits)
+    return {"payout_rows": count, "required_missing": missing_required_payouts(profits)}
 
 
 def main() -> None:
@@ -175,14 +203,23 @@ def main() -> None:
     if args.command == "candles":
         results = collect_candles(args.assets, args.interval, args.hours)
         print(json.dumps(results, indent=2))
-        failures = [r for r in results if "error" in r]
-        for failure in failures:
+        for failure in (r for r in results if "error" in r):
             print(f"PARTIAL FAILURE: {failure['asset']}: {failure['error']}", file=sys.stderr)
-        if all_failed(results):
+        code = exit_code_for(results)
+        if code == 1:
             print("ALL ASSETS FAILED - no dataset stored this cycle", file=sys.stderr)
-            sys.exit(1)
+        if code:
+            sys.exit(code)
     else:
-        print(json.dumps(collect_payouts(), indent=2))
+        result = collect_payouts()
+        print(json.dumps(result, indent=2))
+        if result["required_missing"]:
+            print(
+                f"PAYOUT HEALTH FAILURE: snapshot stored {result['payout_rows']} rows "
+                f"but is missing required quote keys: {result['required_missing']}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -277,13 +277,26 @@ def write_run_bundle(out_root: Path, asset: str, candles_records: list, result: 
     new signals with stale candles. Build in a temp dir, then rename."""
     import os
 
+    from instruments import get_instrument
+
     manifest = result["manifest"]
     candles_bytes = json.dumps(candles_records).encode()
     signals_bytes = json.dumps(result["signals"], indent=1).encode()
     folds_bytes = json.dumps(result["folds"], indent=2).encode()
     manifest["candles_sha256"] = hashlib.sha256(candles_bytes).hexdigest()
     manifest["signals_sha256"] = hashlib.sha256(signals_bytes).hexdigest()
+    manifest["folds_sha256"] = hashlib.sha256(folds_bytes).hexdigest()
     manifest["midas_binary_sha256"] = midas_binary_sha256()
+    # The exact contract this model was backtested on. Any future executor
+    # must refuse to trade a different expiry/active than what was validated
+    # (instruments.verify_contract).
+    spec = get_instrument(asset)
+    manifest["contract"] = {
+        "asset": asset,
+        "order_active": spec.order_active,
+        "option_kind": spec.option_kind,
+        "expiry_seconds": manifest.get("expiry_seconds"),
+    }
 
     run_id = (
         f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
