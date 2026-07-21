@@ -42,6 +42,7 @@ def _source_commit() -> str | None:
 
 def record_experiment(
     *,
+    campaign: str,
     dataset_content_sha256: str | None,
     parameters: dict,
     fold_ranges: list[dict],
@@ -49,9 +50,15 @@ def record_experiment(
     outcome: str,
     ledger_path: Path = LEDGER_PATH,
 ) -> dict:
-    """Append one experiment entry and return it (with its 1-based id)."""
+    """Append one experiment entry and return it (with its 1-based id).
+
+    `campaign` is the persistent research-campaign / strategy-family id
+    (e.g. 'eurusd-logreg'). Search-overfitting exposure is counted per
+    campaign, because the dataset hash changes with every collection while
+    the family of model choices being tried does not."""
     entry = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "campaign": campaign,
         "dataset_content_sha256": dataset_content_sha256,
         "source_commit": _source_commit(),
         "feature_code_hash": _sha256_file(PROJECT_DIR / "features.py"),
@@ -68,14 +75,24 @@ def record_experiment(
     return entry
 
 
-def count_variants(
-    dataset_content_sha256: str | None, ledger_path: Path = LEDGER_PATH
-) -> int:
-    """How many experiments have run against this exact dataset."""
+def count_variants(campaign: str, ledger_path: Path = LEDGER_PATH) -> int:
+    """How many experiments this research campaign has run, cumulatively.
+
+    Counted by campaign, NOT by dataset hash: every collection changes the
+    hash, so a per-hash count would reset to 1 and hide the true number of
+    model choices tried against overlapping, evolving market data. The
+    dataset hash is still recorded on every individual entry."""
     if not ledger_path.exists():
         return 0
     count = 0
     for line in ledger_path.read_text().splitlines():
-        if line.strip() and json.loads(line).get("dataset_content_sha256") == dataset_content_sha256:
+        if not line.strip():
+            continue
+        entry = json.loads(line)
+        # Entries recorded before the campaign field existed (ids 1-3, all
+        # spot-EURUSD logreg experiments) must keep counting - the ledger is
+        # append-only, so they are attributed here instead of rewritten.
+        entry_campaign = entry.get("campaign") or "eurusd-logreg"
+        if entry_campaign == campaign:
             count += 1
     return count

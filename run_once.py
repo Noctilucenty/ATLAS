@@ -18,7 +18,6 @@ from journal import open_journal, record_run
 
 PROJECT_DIR = Path(__file__).resolve().parent
 TRADE_AMOUNT = 1.0
-TRADE_DURATION_MIN = 1
 CANDLE_COUNT = 120
 
 
@@ -73,32 +72,34 @@ def main() -> int:
         print(json.dumps({"error": f"refusing to run: balance mode is {mode}"}))
         return 1
 
-    # Broker naming: spot forex binaries are keyed '<PAIR>-op' in the payout
-    # and open-time tables (see collector.payout_candidates).
-    from collector import payout_candidates
+    # One explicit instrument spec supplies every broker key. Openness and
+    # payout are both read from spec.quote_key + spec.option_kind - never
+    # from independent fallback loops (see instruments.py).
+    from instruments import get_instrument
+
+    spec = get_instrument(ASSET)
 
     market_open_error = payout_error = None
     market_open = False
     try:
         open_time = _call(client.get_all_open_time, timeout=90)
-        for key in payout_candidates(ASSET):
-            entry = open_time["turbo"].get(key) or {}
-            if entry.get("open"):
-                market_open = True
-                break
+        entry = open_time[spec.option_kind].get(spec.quote_key) or {}
+        market_open = bool(entry.get("open"))
     except Exception as exc:
         market_open_error = f"{type(exc).__name__}: {exc}"
 
     payout = None
     try:
         profits = _call(client.get_all_profit, timeout=90)
-        for key in payout_candidates(ASSET):
-            value = profits.get(key, {}).get("turbo") if key in profits else None
-            if isinstance(value, (int, float)):
-                payout = float(value)
-                break
-        if payout is None:
-            payout_error = f"no turbo payout under any of {payout_candidates(ASSET)}"
+        value = (
+            profits.get(spec.quote_key, {}).get(spec.option_kind)
+            if spec.quote_key in profits
+            else None
+        )
+        if isinstance(value, (int, float)):
+            payout = float(value)
+        else:
+            payout_error = f"no {spec.option_kind} payout under '{spec.quote_key}'"
     except Exception as exc:
         payout_error = f"{type(exc).__name__}: {exc}"
 
@@ -118,14 +119,14 @@ def main() -> int:
         ok, order_id = _call(
             client.buy,
             TRADE_AMOUNT,
-            ASSET,
+            spec.order_active,
             decision["signal"].lower(),
-            TRADE_DURATION_MIN,
+            spec.expiry_minutes,
             timeout=60,
         )
         if ok:
             result, profit = _call(
-                client.check_win_v4, order_id, timeout=TRADE_DURATION_MIN * 60 + 60
+                client.check_win_v4, order_id, timeout=spec.expiry_minutes * 60 + 60
             )
         else:
             decision["reasons"].append(f"FAIL ORDER: broker rejected the trade ({order_id})")
@@ -147,7 +148,7 @@ def main() -> int:
         candles=candles,
         order_id=order_id,
         amount=TRADE_AMOUNT if order_id else None,
-        duration_minutes=TRADE_DURATION_MIN if order_id else None,
+        duration_minutes=spec.expiry_minutes if order_id else None,
         result=result,
         profit=profit,
         balance_after=balance_after,

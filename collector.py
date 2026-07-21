@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -78,16 +79,10 @@ def find_gaps(candles: list[dict], interval: int) -> list[dict]:
     return gaps
 
 
-def payout_candidates(asset: str) -> list[str]:
-    """Payout-snapshot keys to try for a candle asset, in order.
-
-    Broker naming (verified live 2026-07-21): spot forex candles are keyed
-    'EURUSD' but their binary-option payout is quoted under 'EURUSD-op'
-    (same underlying price series, ~1 pip apart). 'EURUSD-OTC' is a SEPARATE
-    synthetic market with its own candles and payout - never mix the two."""
-    if asset.endswith("-OTC") or asset.endswith("-op"):
-        return [asset]
-    return [asset, f"{asset}-op"]
+def all_failed(results: list[dict]) -> bool:
+    """True when a collection produced no dataset at all (health signal:
+    an empty collection must never look like success to launchd)."""
+    return bool(results) and all("error" in r for r in results)
 
 
 # ---------------- live collection ----------------
@@ -178,7 +173,14 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "candles":
-        print(json.dumps(collect_candles(args.assets, args.interval, args.hours), indent=2))
+        results = collect_candles(args.assets, args.interval, args.hours)
+        print(json.dumps(results, indent=2))
+        failures = [r for r in results if "error" in r]
+        for failure in failures:
+            print(f"PARTIAL FAILURE: {failure['asset']}: {failure['error']}", file=sys.stderr)
+        if all_failed(results):
+            print("ALL ASSETS FAILED - no dataset stored this cycle", file=sys.stderr)
+            sys.exit(1)
     else:
         print(json.dumps(collect_payouts(), indent=2))
 

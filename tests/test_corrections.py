@@ -175,20 +175,22 @@ def test_noise_brier_never_beats_prior_baseline_materially():
 def test_ledger_appends_and_counts(tmp_path):
     ledger = tmp_path / "ledger.jsonl"
     first = record_experiment(
+        campaign="test-campaign",
         dataset_content_sha256="abc", parameters={"p": 1}, fold_ranges=[],
         payout_source="assumed", outcome="completed", ledger_path=ledger,
     )
     second = record_experiment(
+        campaign="test-campaign",
         dataset_content_sha256="abc", parameters={"p": 2}, fold_ranges=[],
         payout_source="assumed", outcome="rejected", ledger_path=ledger,
     )
     other = record_experiment(
+        campaign="test-campaign",
         dataset_content_sha256="zzz", parameters={}, fold_ranges=[],
         payout_source="assumed", outcome="completed", ledger_path=ledger,
     )
     assert (first["id"], second["id"], other["id"]) == (1, 2, 3)
-    assert count_variants("abc", ledger) == 2
-    assert count_variants("zzz", ledger) == 1
+    assert count_variants("test-campaign", ledger) == 3
     lines = [json.loads(l) for l in ledger.read_text().splitlines()]
     assert lines[1]["outcome"] == "rejected"  # rejected variants are retained
     assert all("feature_code_hash" in l for l in lines)

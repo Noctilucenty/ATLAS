@@ -217,12 +217,35 @@ def latest_dataset_id(
     return row[0] if row else None
 
 
-def export_midas_candles(
-    conn: duckdb.DuckDBPyConnection, dataset_id: int, out_path: Path
-) -> Path:
-    """Export a dataset as a MIDAS Candle JSON array (RFC3339 timestamps)."""
-    frame = load_candles(conn, dataset_id)
-    records = [
+def latest_payout_before(
+    conn: duckdb.DuckDBPyConnection,
+    quote_key: str,
+    kind: str,
+    ts_epoch: int,
+    max_age_seconds: int,
+) -> float | None:
+    """The most recent payout snapshot at or BEFORE ts_epoch, or None.
+
+    Strictly causal: a snapshot taken after the signal timestamp is never
+    used, and a prior snapshot older than max_age_seconds is treated as
+    unavailable rather than silently stale."""
+    row = conn.execute(
+        """SELECT payout, ts_epoch FROM payout_snapshots
+           WHERE asset = ? AND kind = ? AND ts_epoch <= ?
+           ORDER BY ts_epoch DESC LIMIT 1""",
+        (quote_key, kind, int(ts_epoch)),
+    ).fetchone()
+    if row is None:
+        return None
+    payout, snapshot_ts = row
+    if int(ts_epoch) - int(snapshot_ts) > max_age_seconds:
+        return None
+    return float(payout)
+
+
+def frame_to_midas_records(frame: pd.DataFrame) -> list[dict]:
+    """Convert a candle frame to MIDAS Candle JSON records (RFC3339 UTC)."""
+    return [
         {
             "timestamp": datetime.fromtimestamp(int(row.from_ts), timezone.utc)
             .isoformat()
@@ -235,7 +258,14 @@ def export_midas_candles(
         }
         for row in frame.itertuples()
     ]
-    out_path.write_text(json.dumps(records))
+
+
+def export_midas_candles(
+    conn: duckdb.DuckDBPyConnection, dataset_id: int, out_path: Path
+) -> Path:
+    """Export a dataset as a MIDAS Candle JSON array (RFC3339 timestamps)."""
+    frame = load_candles(conn, dataset_id)
+    out_path.write_text(json.dumps(frame_to_midas_records(frame)))
     return out_path
 
 

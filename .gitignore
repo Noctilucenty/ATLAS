@@ -7,3 +7,4 @@ market.duckdb
 journal.db
 signals_out/
 logs/
+runs/

@@ -4,12 +4,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from collector import (  # noqa: E402
+    all_failed,
     dedupe_candles,
     find_gaps,
     normalize_candle,
-    payout_candidates,
     plan_pages,
 )
+from instruments import INSTRUMENTS, get_instrument  # noqa: E402
 
 
 def candle(from_ts: int, interval: int = 60, close: float = 1.1) -> dict:
@@ -92,12 +93,34 @@ def test_empty_and_singleton_series():
     assert find_gaps([candle(0)], 60) == []
 
 
-# ---------------- payout key mapping ----------------
+# ---------------- instrument specs ----------------
 
-def test_spot_assets_try_plain_then_op_key():
-    assert payout_candidates("EURUSD") == ["EURUSD", "EURUSD-op"]
+def test_spot_spec_binds_all_keys_explicitly():
+    spec = get_instrument("EURUSD")
+    assert spec.candle_asset == "EURUSD"
+    assert spec.quote_key == "EURUSD-op"      # payout AND openness, same key
+    assert spec.order_active == "EURUSD"
+    assert spec.option_kind in ("turbo", "binary")
 
-def test_otc_and_op_assets_are_their_own_key():
-    # EURUSD-OTC is a separate synthetic market - never fall through to spot.
-    assert payout_candidates("EURUSD-OTC") == ["EURUSD-OTC"]
-    assert payout_candidates("EURUSD-op") == ["EURUSD-op"]
+def test_otc_spec_is_fully_self_keyed():
+    # EURUSD-OTC is a separate synthetic market - never falls through to spot.
+    spec = get_instrument("EURUSD-OTC")
+    assert spec.candle_asset == spec.quote_key == spec.order_active == "EURUSD-OTC"
+
+def test_unknown_instrument_raises_with_known_list():
+    import pytest
+
+    with pytest.raises(KeyError, match="GBPJPY"):
+        get_instrument("GBPJPY")
+    assert "EURUSD" in INSTRUMENTS
+
+
+# ---------------- collection health ----------------
+
+def test_all_failed_semantics():
+    ok = {"dataset_id": 1, "asset": "EURUSD"}
+    bad = {"asset": "EURUSD-OTC", "error": "TimeoutError: x"}
+    assert all_failed([bad, bad]) is True
+    assert all_failed([ok, bad]) is False   # partial failure is not total failure
+    assert all_failed([ok]) is False
+    assert all_failed([]) is False          # nothing requested != failure

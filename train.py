@@ -145,29 +145,37 @@ def _iso_utc(epoch: int) -> str:
 def make_signal(
     to_ts: int,
     p_up: float,
-    payout: float,
+    payout: float | None,
     ev_margin: float,
     stake: float,
     expiry_seconds: int,
     fold: int,
 ) -> dict:
-    """One MIDAS-compatible BinarySignal JSON object (serde field names)."""
+    """One MIDAS-compatible BinarySignal JSON object (serde field names).
+
+    payout=None means no causally valid payout was available at signal time:
+    the decision is forced to no_trade and tagged payout_unavailable - a
+    payout observed after the signal must never be backfilled."""
+    if payout is None:
+        action, out_payout, tag = "no_trade", 0.0, ",payout_unavailable"
+    else:
+        action, out_payout, tag = decide_action(p_up, payout, ev_margin), payout, ""
     return {
         "timestamp": _iso_utc(to_ts),
-        "action": decide_action(p_up, payout, ev_margin),
+        "action": action,
         "stake": stake,
         "expiry_seconds": expiry_seconds,
-        "payout": payout,
+        "payout": out_payout,
         "predicted_prob_up": round(float(p_up), 6),
         "model_version": MODEL_VERSION,
         "feature_hash": feature_hash(),
-        "note": f"fold={fold}",
+        "note": f"fold={fold}{tag}",
     }
 
 
 def walk_forward(
     feature_frame: pd.DataFrame,
-    payout: float,
+    payout,
     n_splits: int = 5,
     gap: int | None = None,
     ev_margin: float = 0.02,
@@ -175,15 +183,23 @@ def walk_forward(
     expiry_seconds: int = 300,
     horizon: int = 5,
 ) -> dict:
-    """Run the train-freeze-predict loop. Returns signals + fold metrics."""
+    """Run the train-freeze-predict loop. Returns signals + fold metrics.
+
+    `payout` is either a float (ASSUMED constant ratio) or a callable
+    (to_ts) -> float | None that returns the latest prospective payout
+    snapshot at or before the signal timestamp (None = unavailable ->
+    forced no_trade)."""
     labeled = feature_frame.dropna(subset=["label_up"]).reset_index(drop=True)
     X = labeled[FEATURE_COLUMNS]
     y = labeled["label_up"]
     gap = horizon if gap is None else gap
+    prospective = callable(payout)
+    payout_at = payout if prospective else (lambda ts: payout)
 
     splitter = TimeSeriesSplit(n_splits=n_splits, gap=gap)
     signals: list[dict] = []
     folds: list[dict] = []
+    payout_missing_total = 0
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(X)):
         model = ChronoCalibratedModel(n_folds=3, gap=gap)
@@ -192,13 +208,15 @@ def walk_forward(
         p_up = model.predict_proba_up(X.iloc[test_idx])
 
         fold_signals = [
-            make_signal(ts, p, payout, ev_margin, stake, expiry_seconds, fold)
+            make_signal(ts, p, payout_at(int(ts)), ev_margin, stake, expiry_seconds, fold)
             for ts, p in zip(labeled["to_ts"].iloc[test_idx], p_up)
         ]
         signals.extend(fold_signals)
 
         y_test = y.iloc[test_idx].to_numpy()
         trades = sum(1 for s in fold_signals if s["action"] != "no_trade")
+        payout_missing = sum(1 for s in fold_signals if "payout_unavailable" in s["note"])
+        payout_missing_total += payout_missing
         folds.append(
             {
                 "fold": fold,
@@ -210,9 +228,11 @@ def walk_forward(
                 "base_rate_up": float(y_test.mean()),
                 "trades": trades,
                 "coverage": trades / len(test_idx),
+                "payout_missing": payout_missing,
             }
         )
 
+    total_rows = sum(f["test_rows"] for f in folds)
     return {
         "signals": signals,
         "folds": folds,
@@ -221,8 +241,13 @@ def walk_forward(
             "feature_version": FEATURE_VERSION,
             "feature_hash": feature_hash(),
             "feature_columns": FEATURE_COLUMNS,
-            "assumed_payout": payout,
-            "payout_source": "assumed",  # historical payouts not reconstructable
+            "payout_source": "prospective" if prospective else "assumed",
+            "assumed_payout": None if prospective else payout,
+            # Share of evaluated rows with a causally valid payout; MIDAS may
+            # only be told --payout-prospective when this is 1.0.
+            "payout_coverage": (
+                (total_rows - payout_missing_total) / total_rows if total_rows else 0.0
+            ),
             "ev_margin": ev_margin,
             "stake": stake,
             "expiry_seconds": expiry_seconds,
@@ -234,15 +259,71 @@ def walk_forward(
     }
 
 
+DEFAULT_MIDAS_BIN = Path(__file__).resolve().parent.parent / "MIDAS" / "target" / "release" / "binary-backtest"
+
+
+def midas_binary_sha256() -> str | None:
+    import os
+
+    path = Path(os.environ.get("MIDAS_BIN", DEFAULT_MIDAS_BIN))
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+def write_run_bundle(out_root: Path, asset: str, candles_records: list, result: dict) -> Path:
+    """Atomically write one immutable run directory.
+
+    Everything a replay needs travels together - candles, signals, folds and
+    a manifest whose hashes bind them - so a backtest can never silently pair
+    new signals with stale candles. Build in a temp dir, then rename."""
+    import os
+
+    manifest = result["manifest"]
+    candles_bytes = json.dumps(candles_records).encode()
+    signals_bytes = json.dumps(result["signals"], indent=1).encode()
+    folds_bytes = json.dumps(result["folds"], indent=2).encode()
+    manifest["candles_sha256"] = hashlib.sha256(candles_bytes).hexdigest()
+    manifest["signals_sha256"] = hashlib.sha256(signals_bytes).hexdigest()
+    manifest["midas_binary_sha256"] = midas_binary_sha256()
+
+    run_id = (
+        f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+        f"-{asset}-exp{manifest['experiment_id']}"
+    )
+    asset_root = out_root / asset
+    asset_root.mkdir(parents=True, exist_ok=True)
+    tmp_dir = asset_root / f".tmp-{run_id}"
+    tmp_dir.mkdir()
+    (tmp_dir / "candles.json").write_bytes(candles_bytes)
+    (tmp_dir / "signals.json").write_bytes(signals_bytes)
+    (tmp_dir / "folds.json").write_bytes(folds_bytes)
+    (tmp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    final_dir = asset_root / run_id
+    os.replace(tmp_dir, final_dir)
+    return final_dir
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--asset", default="EURUSD")
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--horizon", type=int, default=5, help="label horizon in bars")
+    parser.add_argument(
+        "--payout-mode",
+        choices=("assumed", "prospective"),
+        default="assumed",
+        help="assumed: constant --payout; prospective: per-signal causal join "
+        "to the latest payout snapshot at or before each signal",
+    )
     parser.add_argument("--payout", type=float, default=0.85, help="ASSUMED payout ratio")
+    parser.add_argument(
+        "--payout-max-age", type=int, default=7200,
+        help="prospective mode: max snapshot age in seconds (older = unavailable)",
+    )
+    parser.add_argument("--campaign", default=None,
+                        help="research-campaign id (default: <asset>-logreg)")
     parser.add_argument("--splits", type=int, default=5)
     parser.add_argument("--ev-margin", type=float, default=0.02)
-    parser.add_argument("--out", default="signals_out")
+    parser.add_argument("--out", default="runs")
     args = parser.parse_args()
 
     from storage import load_canonical_history, open_db
@@ -260,15 +341,29 @@ def main() -> None:
         )
 
     feature_frame = build_features(candles, interval=args.interval, horizon=args.horizon)
+
+    if args.payout_mode == "prospective":
+        from instruments import get_instrument
+        from storage import latest_payout_before
+
+        spec = get_instrument(args.asset)
+        payout = lambda ts: latest_payout_before(  # noqa: E731
+            conn, spec.quote_key, spec.option_kind, ts, args.payout_max_age
+        )
+    else:
+        payout = args.payout
+
     result = walk_forward(
         feature_frame,
-        payout=args.payout,
+        payout=payout,
         n_splits=args.splits,
         ev_margin=args.ev_margin,
         expiry_seconds=args.horizon * args.interval,
         horizon=args.horizon,
     )
+    campaign = args.campaign or f"{args.asset.lower()}-logreg"
     result["manifest"]["asset"] = args.asset
+    result["manifest"]["campaign"] = campaign
     result["manifest"]["dataset_content_sha256"] = history_report["content_sha256"]
     result["manifest"]["datasets_used"] = history_report["datasets_used"]
     result["manifest"]["history_gaps"] = len(history_report["gaps"])
@@ -276,25 +371,29 @@ def main() -> None:
     from experiments import count_variants, record_experiment
 
     entry = record_experiment(
+        campaign=campaign,
         dataset_content_sha256=history_report["content_sha256"],
         parameters={k: v for k, v in result["manifest"].items() if k != "feature_columns"},
         fold_ranges=[
             {"fold": f["fold"], "train_end_ts": f["train_end_ts"], "test_start_ts": f["test_start_ts"]}
             for f in result["folds"]
         ],
-        payout_source="assumed",
+        payout_source=result["manifest"]["payout_source"],
         outcome="completed",
     )
     result["manifest"]["experiment_id"] = entry["id"]
-    result["manifest"]["variants_attempted"] = count_variants(history_report["content_sha256"])
+    result["manifest"]["variants_attempted"] = count_variants(campaign)
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(exist_ok=True)
-    (out_dir / "signals.json").write_text(json.dumps(result["signals"], indent=1))
-    (out_dir / "manifest.json").write_text(json.dumps(result["manifest"], indent=2))
-    (out_dir / "folds.json").write_text(json.dumps(result["folds"], indent=2))
+    from storage import frame_to_midas_records
 
-    print(json.dumps({"folds": result["folds"], "manifest": result["manifest"]}, indent=2))
+    run_dir = write_run_bundle(Path(args.out), args.asset, frame_to_midas_records(candles), result)
+
+    print(
+        json.dumps(
+            {"run_dir": str(run_dir), "folds": result["folds"], "manifest": result["manifest"]},
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
