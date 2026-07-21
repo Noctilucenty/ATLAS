@@ -73,18 +73,33 @@ def main() -> int:
         print(json.dumps({"error": f"refusing to run: balance mode is {mode}"}))
         return 1
 
+    # Broker naming: spot forex binaries are keyed '<PAIR>-op' in the payout
+    # and open-time tables (see collector.payout_candidates).
+    from collector import payout_candidates
+
     market_open_error = payout_error = None
+    market_open = False
     try:
         open_time = _call(client.get_all_open_time, timeout=90)
-        market_open = bool(open_time["turbo"][ASSET]["open"])
+        for key in payout_candidates(ASSET):
+            entry = open_time["turbo"].get(key) or {}
+            if entry.get("open"):
+                market_open = True
+                break
     except Exception as exc:
-        market_open = False
         market_open_error = f"{type(exc).__name__}: {exc}"
 
+    payout = None
     try:
-        payout = float(_call(client.get_all_profit, timeout=90)[ASSET]["turbo"])
+        profits = _call(client.get_all_profit, timeout=90)
+        for key in payout_candidates(ASSET):
+            value = profits.get(key, {}).get("turbo") if key in profits else None
+            if isinstance(value, (int, float)):
+                payout = float(value)
+                break
+        if payout is None:
+            payout_error = f"no turbo payout under any of {payout_candidates(ASSET)}"
     except Exception as exc:
-        payout = None
         payout_error = f"{type(exc).__name__}: {exc}"
 
     now = time.time()

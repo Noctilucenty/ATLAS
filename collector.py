@@ -78,6 +78,18 @@ def find_gaps(candles: list[dict], interval: int) -> list[dict]:
     return gaps
 
 
+def payout_candidates(asset: str) -> list[str]:
+    """Payout-snapshot keys to try for a candle asset, in order.
+
+    Broker naming (verified live 2026-07-21): spot forex candles are keyed
+    'EURUSD' but their binary-option payout is quoted under 'EURUSD-op'
+    (same underlying price series, ~1 pip apart). 'EURUSD-OTC' is a SEPARATE
+    synthetic market with its own candles and payout - never mix the two."""
+    if asset.endswith("-OTC") or asset.endswith("-op"):
+        return [asset]
+    return [asset, f"{asset}-op"]
+
+
 # ---------------- live collection ----------------
 
 def _connect_client():
@@ -95,38 +107,52 @@ def _connect_client():
     return client, _call
 
 
-def collect_candles(asset: str, interval: int, hours: float) -> dict:
+def collect_candles(assets: list[str], interval: int, hours: float) -> list[dict]:
+    """Collect one immutable dataset per asset over a single broker session.
+
+    One asset failing (closed market, unknown symbol, timeout) never blocks
+    the others - its result carries an 'error' entry instead."""
     import pandas as pd
 
     from storage import open_db, store_dataset
     from validation import validate_candles
 
     client, _call = _connect_client()
-    end_ts = time.time()
-    raw: list[dict] = []
-    for page_end in plan_pages(end_ts, hours, interval):
-        page = _call(client.get_candles, asset, interval, PAGE_SIZE, page_end, timeout=60)
-        raw.extend(normalize_candle(c) for c in page)
-
-    cutoff = end_ts - hours * 3600
-    candles = [c for c in dedupe_candles(raw) if c["from_ts"] >= cutoff and c["to_ts"] <= end_ts]
-    gaps = find_gaps(candles, interval)
-
-    # Validation failure aborts the run - a bad dataset must never be stored.
-    validate_candles(pd.DataFrame(candles), interval)
-
     conn = open_db()
-    dataset_id = store_dataset(conn, asset, interval, candles, gaps)
-    return {
-        "dataset_id": dataset_id,
-        "asset": asset,
-        "interval_seconds": interval,
-        "candles": len(candles),
-        "gaps": len(gaps),
-        "gap_detail": gaps,
-        "start_utc": datetime.fromtimestamp(candles[0]["from_ts"], timezone.utc).isoformat() if candles else None,
-        "end_utc": datetime.fromtimestamp(candles[-1]["to_ts"], timezone.utc).isoformat() if candles else None,
-    }
+    results = []
+    for asset in assets:
+        try:
+            end_ts = time.time()
+            raw: list[dict] = []
+            for page_end in plan_pages(end_ts, hours, interval):
+                page = _call(client.get_candles, asset, interval, PAGE_SIZE, page_end, timeout=60)
+                raw.extend(normalize_candle(c) for c in page)
+
+            cutoff = end_ts - hours * 3600
+            candles = [
+                c for c in dedupe_candles(raw) if c["from_ts"] >= cutoff and c["to_ts"] <= end_ts
+            ]
+            gaps = find_gaps(candles, interval)
+
+            # Validation failure aborts this asset - a bad dataset must never be stored.
+            validate_candles(pd.DataFrame(candles), interval)
+
+            dataset_id = store_dataset(conn, asset, interval, candles, gaps)
+            results.append(
+                {
+                    "dataset_id": dataset_id,
+                    "asset": asset,
+                    "interval_seconds": interval,
+                    "candles": len(candles),
+                    "gaps": len(gaps),
+                    "gap_detail": gaps,
+                    "start_utc": datetime.fromtimestamp(candles[0]["from_ts"], timezone.utc).isoformat() if candles else None,
+                    "end_utc": datetime.fromtimestamp(candles[-1]["to_ts"], timezone.utc).isoformat() if candles else None,
+                }
+            )
+        except Exception as exc:
+            results.append({"asset": asset, "error": f"{type(exc).__name__}: {exc}"})
+    return results
 
 
 def collect_payouts() -> dict:
@@ -143,8 +169,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    candles_cmd = sub.add_parser("candles", help="collect historical candles into a new dataset")
-    candles_cmd.add_argument("asset")
+    candles_cmd = sub.add_parser("candles", help="collect historical candles, one dataset per asset")
+    candles_cmd.add_argument("assets", nargs="+")
     candles_cmd.add_argument("--interval", type=int, default=60, help="candle seconds (default 60)")
     candles_cmd.add_argument("--hours", type=float, default=24.0, help="lookback hours (default 24)")
 
@@ -152,7 +178,7 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "candles":
-        print(json.dumps(collect_candles(args.asset, args.interval, args.hours), indent=2))
+        print(json.dumps(collect_candles(args.assets, args.interval, args.hours), indent=2))
     else:
         print(json.dumps(collect_payouts(), indent=2))
 

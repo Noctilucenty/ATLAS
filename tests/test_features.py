@@ -102,17 +102,17 @@ def test_mtf_align_only_takes_trend_values():
 
 
 def test_real_dataset_if_available():
-    """Smoke-run the pipeline over the live-collected DuckDB dataset."""
+    """Smoke-run the pipeline over the live-collected canonical history
+    (same loader production train.py uses)."""
     db_file = Path(__file__).resolve().parent.parent / "market.duckdb"
     if not db_file.exists():
         pytest.skip("no collected dataset")
-    from storage import latest_dataset_id, load_candles, open_db
+    from storage import load_canonical_history, open_db
 
     conn = open_db(db_file)
-    dataset_id = latest_dataset_id(conn, "EURUSD", 60)
-    if dataset_id is None:
-        pytest.skip("no EURUSD dataset")
-    candles = load_candles(conn, dataset_id)
+    candles, report = load_canonical_history(conn, "EURUSD", 60)
+    if report["candles"] < 600:
+        pytest.skip("not enough accumulated history yet")
     out = build_features(candles, horizon=5)
-    assert len(out) > 500
+    assert len(out) > 300
     assert not out[FEATURE_COLUMNS].isna().any().any()

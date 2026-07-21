@@ -7,6 +7,7 @@ from collector import (  # noqa: E402
     dedupe_candles,
     find_gaps,
     normalize_candle,
+    payout_candidates,
     plan_pages,
 )
 
@@ -89,3 +90,14 @@ def test_multi_candle_gap_counts_all_missing():
 def test_empty_and_singleton_series():
     assert find_gaps([], 60) == []
     assert find_gaps([candle(0)], 60) == []
+
+
+# ---------------- payout key mapping ----------------
+
+def test_spot_assets_try_plain_then_op_key():
+    assert payout_candidates("EURUSD") == ["EURUSD", "EURUSD-op"]
+
+def test_otc_and_op_assets_are_their_own_key():
+    # EURUSD-OTC is a separate synthetic market - never fall through to spot.
+    assert payout_candidates("EURUSD-OTC") == ["EURUSD-OTC"]
+    assert payout_candidates("EURUSD-op") == ["EURUSD-op"]
