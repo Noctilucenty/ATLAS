@@ -9,6 +9,7 @@ The trade journal (journal.db, SQLite) is unchanged - execution records and
 market data are deliberately separate stores.
 """
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,8 @@ import pandas as pd
 
 DB_PATH = Path(__file__).resolve().parent / "market.duckdb"
 SOURCE = "iqoptionapi-websocket"
+
+CANDLE_FIELDS = ("from_ts", "to_ts", "open", "high", "low", "close", "volume")
 
 SCHEMA = """
 CREATE SEQUENCE IF NOT EXISTS dataset_id_seq;
@@ -31,7 +34,8 @@ CREATE TABLE IF NOT EXISTS datasets (
     end_ts BIGINT,
     candle_count INTEGER NOT NULL,
     gap_count INTEGER NOT NULL,
-    gaps VARCHAR NOT NULL
+    gaps VARCHAR NOT NULL,
+    content_sha256 VARCHAR
 );
 CREATE TABLE IF NOT EXISTS candles (
     dataset_id BIGINT NOT NULL,
@@ -60,7 +64,17 @@ CREATE TABLE IF NOT EXISTS payout_snapshots (
 def open_db(path: Path = DB_PATH) -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(str(path))
     conn.execute(SCHEMA)
+    # Migrate pre-hash databases in place.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info('datasets')").fetchall()}
+    if "content_sha256" not in columns:
+        conn.execute("ALTER TABLE datasets ADD COLUMN content_sha256 VARCHAR")
     return conn
+
+
+def dataset_sha256(candles: list[dict]) -> str:
+    """Deterministic content hash: canonical JSON of sorted candle tuples."""
+    canonical = [[c[f] for f in CANDLE_FIELDS] for c in sorted(candles, key=lambda c: c["from_ts"])]
+    return hashlib.sha256(json.dumps(canonical, separators=(",", ":")).encode()).hexdigest()
 
 
 def store_dataset(
@@ -70,31 +84,102 @@ def store_dataset(
     candles: list[dict],
     gaps: list[dict],
 ) -> int:
-    dataset_id = conn.execute(
-        """INSERT INTO datasets (asset, interval_seconds, collected_at_utc, source,
-               start_ts, end_ts, candle_count, gap_count, gaps)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-        (
-            asset,
-            interval,
-            datetime.now(timezone.utc),
-            SOURCE,
-            candles[0]["from_ts"] if candles else None,
-            candles[-1]["to_ts"] if candles else None,
-            len(candles),
-            len(gaps),
-            json.dumps(gaps),
-        ),
-    ).fetchone()[0]
-    if candles:
-        frame = pd.DataFrame(candles)
-        frame.insert(0, "dataset_id", dataset_id)
-        conn.execute(
-            """INSERT INTO candles
-               SELECT dataset_id, from_ts, to_ts, open, high, low, close, volume
-               FROM frame"""
-        )
+    """Transactionally insert an immutable dataset with its content hash."""
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        dataset_id = conn.execute(
+            """INSERT INTO datasets (asset, interval_seconds, collected_at_utc, source,
+                   start_ts, end_ts, candle_count, gap_count, gaps, content_sha256)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+            (
+                asset,
+                interval,
+                datetime.now(timezone.utc),
+                SOURCE,
+                candles[0]["from_ts"] if candles else None,
+                candles[-1]["to_ts"] if candles else None,
+                len(candles),
+                len(gaps),
+                json.dumps(gaps),
+                dataset_sha256(candles),
+            ),
+        ).fetchone()[0]
+        if candles:
+            frame = pd.DataFrame(candles)
+            frame.insert(0, "dataset_id", dataset_id)
+            conn.execute(
+                """INSERT INTO candles
+                   SELECT dataset_id, from_ts, to_ts, open, high, low, close, volume
+                   FROM frame"""
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     return dataset_id
+
+
+def load_canonical_history(
+    conn: duckdb.DuckDBPyConnection, asset: str, interval: int
+) -> tuple[pd.DataFrame, dict]:
+    """Merge ALL immutable datasets for an asset/interval into one canonical,
+    deduplicated, ascending history.
+
+    Deterministic resolution: for a timestamp observed by several datasets,
+    the earliest-collected dataset (lowest id) wins - first observation is
+    closest to the event. Later observations that DISAGREE on OHLCV are
+    recorded as conflicts, never silently merged. Gaps are reported so the
+    feature pipeline can invalidate windows that would span them.
+
+    Returns (history_frame, report) where report carries datasets_used,
+    conflicts, gaps and the content hash of the merged history."""
+    rows = conn.execute(
+        """SELECT c.dataset_id, c.from_ts, c.to_ts, c.open, c.high, c.low, c.close, c.volume
+           FROM candles c JOIN datasets d ON d.id = c.dataset_id
+           WHERE d.asset = ? AND d.interval_seconds = ?
+           ORDER BY c.from_ts, c.dataset_id""",
+        (asset, interval),
+    ).df()
+    if rows.empty:
+        return rows, {"datasets_used": [], "candles": 0, "conflicts": [], "gaps": [], "content_sha256": None}
+
+    conflicts = []
+    winners = rows.drop_duplicates(subset="from_ts", keep="first")
+    for from_ts, group in rows.groupby("from_ts"):
+        if len(group) > 1:
+            first = group.iloc[0]
+            for _, other in group.iloc[1:].iterrows():
+                if any(abs(first[f] - other[f]) > 1e-9 for f in ("open", "high", "low", "close", "volume")):
+                    conflicts.append(
+                        {
+                            "from_ts": int(from_ts),
+                            "kept_dataset": int(first.dataset_id),
+                            "conflicting_dataset": int(other.dataset_id),
+                        }
+                    )
+
+    history = winners.drop(columns="dataset_id").reset_index(drop=True)
+    history["from_ts"] = history["from_ts"].astype(int)
+    history["to_ts"] = history["to_ts"].astype(int)
+
+    deltas = history["from_ts"].diff().dropna()
+    gaps = [
+        {
+            "after_ts": int(history["from_ts"].iloc[i - 1]),
+            "resume_ts": int(history["from_ts"].iloc[i]),
+            "missing": int((history["from_ts"].iloc[i] - history["from_ts"].iloc[i - 1]) // interval - 1),
+        }
+        for i in list(deltas[deltas != interval].index)
+    ]
+
+    report = {
+        "datasets_used": sorted(int(i) for i in rows["dataset_id"].unique()),
+        "candles": len(history),
+        "conflicts": conflicts,
+        "gaps": gaps,
+        "content_sha256": dataset_sha256(history.to_dict("records")),
+    }
+    return history, report
 
 
 def store_payout_snapshot(conn: duckdb.DuckDBPyConnection, profits: dict) -> int:

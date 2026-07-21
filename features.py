@@ -17,7 +17,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 
-FEATURE_VERSION = "1.0.0"
+FEATURE_VERSION = "1.1.0"  # 1.1.0: gap-aware - windows and labels never span missing bars
 
 EMA_FAST = 8
 EMA_SLOW = 21
@@ -78,13 +78,46 @@ def _mtf_trend(df: pd.DataFrame, interval: int, factor: int) -> pd.Series:
     return merged["trend"]
 
 
+def split_contiguous(df: pd.DataFrame, interval: int) -> list[pd.DataFrame]:
+    """Split a candle frame into maximal contiguous segments at gap boundaries."""
+    df = df.reset_index(drop=True)
+    if df.empty:
+        return []
+    breaks = df.index[df["from_ts"].diff() != interval].tolist()
+    breaks.append(len(df))
+    return [
+        df.iloc[start:end].reset_index(drop=True)
+        for start, end in zip(breaks, breaks[1:])
+        if end > start
+    ]
+
+
 def build_features(df: pd.DataFrame, interval: int = 60, horizon: int = 5) -> pd.DataFrame:
-    """Compute the curated feature set plus the forward label.
+    """Compute the curated feature set plus the forward label, gap-aware.
+
+    The frame is split into contiguous segments at every missing-bar boundary
+    and each segment is processed independently, so no rolling window, EMA
+    state, multi-timeframe trend, or forward label ever crosses a gap.
+    Segments too short to survive indicator warmup contribute nothing.
 
     Input: a validated candle frame (validation.validate_candles), ascending.
     Output columns: from_ts, to_ts, every FEATURE_COLUMNS entry, label_up
     (1.0 price rose over `horizon` bars, 0.0 fell, NaN tie/end-of-data), and
     feature_version. Warmup rows with undefined features are dropped."""
+    segments = split_contiguous(df, interval)
+    parts = [
+        _build_features_segment(segment, interval, horizon)
+        for segment in segments
+    ]
+    parts = [p for p in parts if not p.empty]
+    if not parts:
+        return pd.DataFrame(
+            columns=["from_ts", "to_ts", *FEATURE_COLUMNS, "label_up", "feature_version"]
+        )
+    return pd.concat(parts, ignore_index=True)
+
+
+def _build_features_segment(df: pd.DataFrame, interval: int, horizon: int) -> pd.DataFrame:
     df = df.reset_index(drop=True)
     out = pd.DataFrame({"from_ts": df["from_ts"], "to_ts": df["to_ts"]})
 

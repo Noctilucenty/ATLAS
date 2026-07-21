@@ -25,7 +25,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 from sklearn.model_selection import TimeSeriesSplit
@@ -34,7 +33,89 @@ from sklearn.preprocessing import StandardScaler
 
 from features import FEATURE_COLUMNS, FEATURE_VERSION, build_features
 
-MODEL_VERSION = "logreg-1.0.0"
+MODEL_VERSION = "logreg-1.1.0"  # 1.1.0: chronological purged calibration
+
+
+def _base_pipeline():
+    return make_pipeline(
+        StandardScaler(), LogisticRegression(C=0.1, max_iter=1000, random_state=0)
+    )
+
+
+def _prob_up(model, X) -> np.ndarray:
+    classes = list(model.classes_)
+    if 1.0 not in classes:
+        return np.zeros(len(X))
+    if 0.0 not in classes:
+        return np.ones(len(X))
+    return model.predict_proba(X)[:, classes.index(1.0)]
+
+
+def chrono_calibration_splits(
+    n_rows: int, n_folds: int = 3, gap: int = 5, min_train: int = 50
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Chronological purged calibration folds.
+
+    Rows are assumed time-ordered. The row range is cut into n_folds + 1
+    sequential blocks; fold k trains on every row strictly before block k+1
+    minus a `gap` purge (overlapping-label protection) and validates on block
+    k+1. Every training index therefore precedes every validation index."""
+    boundaries = np.linspace(0, n_rows, n_folds + 2, dtype=int)
+    splits = []
+    for k in range(1, n_folds + 1):
+        val_start, val_end = boundaries[k], boundaries[k + 1]
+        train_end = max(0, val_start - gap)
+        if train_end < min_train or val_end <= val_start:
+            continue
+        splits.append((np.arange(0, train_end), np.arange(val_start, val_end)))
+    return splits
+
+
+class ChronoCalibratedModel:
+    """Regularized logistic regression with chronologically calibrated output.
+
+    Calibration pairs come only from purged, strictly-later validation blocks
+    inside the training window (see chrono_calibration_splits), then a sigmoid
+    map (logistic regression on the raw score) is fitted to them. The final
+    base model is refit on the whole training window. The test window is
+    never touched."""
+
+    def __init__(self, n_folds: int = 3, gap: int = 5):
+        self.n_folds = n_folds
+        self.gap = gap
+
+    def fit(self, X: pd.DataFrame, y: pd.Series):
+        self.constant_ = None
+        if len(np.unique(y)) < 2:
+            # Degenerate training window: emit the only observed class.
+            self.constant_ = float(np.asarray(y)[0])
+            return self
+        scores, labels = [], []
+        for train_idx, val_idx in chrono_calibration_splits(len(X), self.n_folds, self.gap):
+            base = _base_pipeline()
+            base.fit(X.iloc[train_idx], y.iloc[train_idx])
+            scores.append(_prob_up(base, X.iloc[val_idx]))
+            labels.append(y.iloc[val_idx].to_numpy())
+
+        self.base_ = _base_pipeline()
+        self.base_.fit(X, y)
+
+        self.calibrator_ = None
+        if scores:
+            raw = np.concatenate(scores).reshape(-1, 1)
+            out = np.concatenate(labels)
+            if len(np.unique(out)) == 2:
+                self.calibrator_ = LogisticRegression(max_iter=1000)
+                self.calibrator_.fit(raw, out)
+        return self
+
+    def predict_proba_up(self, X: pd.DataFrame) -> np.ndarray:
+        if self.constant_ is not None:
+            return np.full(len(X), self.constant_)
+        raw = _prob_up(self.base_, X)
+        if self.calibrator_ is None:
+            return raw
+        return _prob_up(self.calibrator_, raw.reshape(-1, 1))
 
 
 def feature_hash() -> str:
@@ -105,24 +186,10 @@ def walk_forward(
     folds: list[dict] = []
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(X)):
-        # Regularized logistic regression wrapped in cross-validated sigmoid
-        # calibration: when out-of-fold predictions carry no information the
-        # calibrated probabilities collapse to the base rate, so the EV gate
-        # abstains on noise instead of trading overconfident estimates. The
-        # calibration folds are contiguous blocks inside the training window
-        # only - the test window stays untouched.
-        model = CalibratedClassifierCV(
-            make_pipeline(
-                StandardScaler(),
-                LogisticRegression(C=0.1, max_iter=1000, random_state=0),
-            ),
-            method="sigmoid",
-            cv=3,
-        )
+        model = ChronoCalibratedModel(n_folds=3, gap=gap)
         model.fit(X.iloc[train_idx], y.iloc[train_idx])
         # Model is now frozen; only strictly-later rows are predicted.
-        up_col = list(model.classes_).index(1.0)
-        p_up = model.predict_proba(X.iloc[test_idx])[:, up_col]
+        p_up = model.predict_proba_up(X.iloc[test_idx])
 
         fold_signals = [
             make_signal(ts, p, payout, ev_margin, stake, expiry_seconds, fold)
@@ -163,10 +230,6 @@ def walk_forward(
             "n_splits": n_splits,
             "gap_bars": gap,
             "labeled_rows": len(labeled),
-            # Honest search accounting (backtest-overfitting exposure): counts
-            # every model configuration tried during development, not just the
-            # survivor. v1 history: plain logreg, C=0.1 logreg, calibrated C=0.1.
-            "variants_attempted": 3,
         },
     }
 
@@ -182,13 +245,19 @@ def main() -> None:
     parser.add_argument("--out", default="signals_out")
     args = parser.parse_args()
 
-    from storage import latest_dataset_id, load_candles, open_db
+    from storage import load_canonical_history, open_db
 
     conn = open_db()
-    dataset_id = latest_dataset_id(conn, args.asset, args.interval)
-    if dataset_id is None:
-        raise SystemExit(f"no dataset for {args.asset}@{args.interval}s - run collector.py first")
-    candles = load_candles(conn, dataset_id)
+    # Canonical history: ALL immutable datasets merged and deduplicated, so
+    # scheduled rolling collections accumulate instead of replacing.
+    candles, history_report = load_canonical_history(conn, args.asset, args.interval)
+    if candles.empty:
+        raise SystemExit(f"no data for {args.asset}@{args.interval}s - run collector.py first")
+    if history_report["conflicts"]:
+        raise SystemExit(
+            f"canonical history has {len(history_report['conflicts'])} candle "
+            f"conflicts - resolve before training: {history_report['conflicts'][:3]}"
+        )
 
     feature_frame = build_features(candles, interval=args.interval, horizon=args.horizon)
     result = walk_forward(
@@ -199,8 +268,25 @@ def main() -> None:
         expiry_seconds=args.horizon * args.interval,
         horizon=args.horizon,
     )
-    result["manifest"]["dataset_id"] = dataset_id
     result["manifest"]["asset"] = args.asset
+    result["manifest"]["dataset_content_sha256"] = history_report["content_sha256"]
+    result["manifest"]["datasets_used"] = history_report["datasets_used"]
+    result["manifest"]["history_gaps"] = len(history_report["gaps"])
+
+    from experiments import count_variants, record_experiment
+
+    entry = record_experiment(
+        dataset_content_sha256=history_report["content_sha256"],
+        parameters={k: v for k, v in result["manifest"].items() if k != "feature_columns"},
+        fold_ranges=[
+            {"fold": f["fold"], "train_end_ts": f["train_end_ts"], "test_start_ts": f["test_start_ts"]}
+            for f in result["folds"]
+        ],
+        payout_source="assumed",
+        outcome="completed",
+    )
+    result["manifest"]["experiment_id"] = entry["id"]
+    result["manifest"]["variants_attempted"] = count_variants(history_report["content_sha256"])
 
     out_dir = Path(args.out)
     out_dir.mkdir(exist_ok=True)

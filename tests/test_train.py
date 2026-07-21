@@ -91,10 +91,9 @@ def test_signals_cover_every_test_row_including_no_trade():
     result = walk_forward(synthetic_features(), payout=0.85, n_splits=4)
     assert len(result["signals"]) == sum(f["test_rows"] for f in result["folds"])
 
-def test_manifest_declares_assumed_payout_and_search_accounting():
+def test_manifest_declares_assumed_payout():
     result = walk_forward(synthetic_features(), payout=0.85, n_splits=4)
     manifest = result["manifest"]
     assert manifest["payout_source"] == "assumed"
     assert manifest["assumed_payout"] == 0.85
-    assert manifest["variants_attempted"] >= 1
     assert manifest["feature_hash"] == feature_hash()

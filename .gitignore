@@ -6,3 +6,4 @@ __pycache__/
 market.duckdb
 journal.db
 signals_out/
+logs/
