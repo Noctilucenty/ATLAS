@@ -50,6 +50,7 @@ def test_script_completes_and_logs_a_full_cycle(tmp_path):
     assert "=== cycle " in log
     assert "STUB python collector.py candles EURUSD EURUSD-OTC" in log
     assert "STUB python collector.py payouts" in log
+    assert "STUB python health_report.py" in log
     assert "=== cycle exit status: 0 ===" in log
 
 

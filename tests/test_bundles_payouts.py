@@ -164,13 +164,87 @@ def test_contract_verification_rejects_mismatched_executor():
         "contract": {"asset": "EURUSD", "order_active": "EURUSD",
                      "option_kind": "turbo", "expiry_seconds": 300}
     }
-    verify_contract(manifest, expiry_seconds=300, order_active="EURUSD")  # ok
+    verify_contract(manifest, expiry_seconds=300, order_active="EURUSD", option_kind="turbo")
     with pytest.raises(ValueError, match="contract mismatch"):
-        verify_contract(manifest, expiry_seconds=60, order_active="EURUSD")
+        verify_contract(manifest, expiry_seconds=60, order_active="EURUSD", option_kind="turbo")
     with pytest.raises(ValueError, match="contract mismatch"):
-        verify_contract(manifest, expiry_seconds=300, order_active="EURUSD-OTC")
+        verify_contract(manifest, expiry_seconds=300, order_active="EURUSD-OTC", option_kind="turbo")
     with pytest.raises(ValueError, match="contract mismatch"):
-        verify_contract({}, expiry_seconds=300, order_active="EURUSD")
+        verify_contract(manifest, expiry_seconds=300, order_active="EURUSD", option_kind="binary")
+    with pytest.raises(ValueError, match="contract mismatch"):
+        verify_contract({}, expiry_seconds=300, order_active="EURUSD", option_kind="turbo")
+
+
+# ---------------- execution guard: mismatches never reach the broker ----------------
+
+class BrokerSpy:
+    def __init__(self):
+        self.calls = []
+
+    def buy(self, amount, active, direction, expiry_minutes):
+        self.calls.append((amount, active, direction, expiry_minutes))
+        return True, 12345
+
+
+def _direct_call(fn, *args, timeout=60, **kwargs):
+    return fn(*args, **kwargs)
+
+
+def test_guarded_buy_places_order_only_on_exact_contract_match():
+    from execution_guard import guarded_buy
+    from instruments import get_instrument
+
+    spec = get_instrument("EURUSD")  # 1-minute turbo on EURUSD
+    matching = {
+        "contract": {"asset": "EURUSD", "order_active": "EURUSD",
+                     "option_kind": "turbo", "expiry_seconds": 60}
+    }
+    broker = BrokerSpy()
+    ok, order_id = guarded_buy(broker, _direct_call, matching, spec, 1.0, "call")
+    assert ok and order_id == 12345
+    assert broker.calls == [(1.0, "EURUSD", "call", 1)]
+
+
+def test_guarded_buy_blocks_every_mismatch_before_broker_call():
+    from execution_guard import guarded_buy
+    from instruments import get_instrument
+
+    spec = get_instrument("EURUSD")
+    mismatches = [
+        # 5-minute model bundle vs the 1-minute executor contract.
+        {"contract": {"asset": "EURUSD", "order_active": "EURUSD",
+                      "option_kind": "turbo", "expiry_seconds": 300}},
+        # Different active.
+        {"contract": {"asset": "EURUSD-OTC", "order_active": "EURUSD-OTC",
+                      "option_kind": "turbo", "expiry_seconds": 60}},
+        # Different option kind.
+        {"contract": {"asset": "EURUSD", "order_active": "EURUSD",
+                      "option_kind": "binary", "expiry_seconds": 60}},
+        # Missing contract entirely.
+        {},
+    ]
+    for manifest in mismatches:
+        broker = BrokerSpy()
+        with pytest.raises(ValueError, match="contract mismatch"):
+            guarded_buy(broker, _direct_call, manifest, spec, 1.0, "call")
+        assert broker.calls == [], f"broker was reached despite mismatch: {manifest}"
+
+
+def test_guarded_buy_validates_direction_and_amount_after_contract():
+    from execution_guard import guarded_buy
+    from instruments import get_instrument
+
+    spec = get_instrument("EURUSD")
+    matching = {
+        "contract": {"asset": "EURUSD", "order_active": "EURUSD",
+                     "option_kind": "turbo", "expiry_seconds": 60}
+    }
+    broker = BrokerSpy()
+    with pytest.raises(ValueError, match="direction"):
+        guarded_buy(broker, _direct_call, matching, spec, 1.0, "sideways")
+    with pytest.raises(ValueError, match="amount"):
+        guarded_buy(broker, _direct_call, matching, spec, 0.0, "call")
+    assert broker.calls == []
 
 
 # ---------------- campaign accounting ----------------

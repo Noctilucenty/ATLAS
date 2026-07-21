@@ -44,20 +44,26 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
 }
 
 
-def verify_contract(manifest: dict, *, expiry_seconds: int, order_active: str) -> None:
+def verify_contract(
+    manifest: dict, *, expiry_seconds: int, order_active: str, option_kind: str
+) -> None:
     """Refuse execution when the executor's contract differs from the one the
-    bundle was backtested on. A model validated on 5-minute expiries says
-    nothing about 1-minute contracts - the mismatch must be a hard error,
-    never a silent substitution."""
+    bundle was backtested on. A model validated on 5-minute turbo contracts
+    says nothing about 1-minute or binary-kind contracts - the mismatch must
+    be a hard error, never a silent substitution.
+
+    Any model execution path MUST call this immediately before the broker
+    buy call - use execution_guard.guarded_buy, never client.buy directly."""
     contract = manifest.get("contract") or {}
     if (
         contract.get("expiry_seconds") != expiry_seconds
         or contract.get("order_active") != order_active
+        or contract.get("option_kind") != option_kind
     ):
         raise ValueError(
             "executor contract mismatch: bundle was validated on "
             f"{contract}, executor wants expiry_seconds={expiry_seconds}, "
-            f"order_active='{order_active}'"
+            f"order_active='{order_active}', option_kind='{option_kind}'"
         )
 
 

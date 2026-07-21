@@ -16,6 +16,9 @@ cycle_status=0
   echo "=== cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
   .venv/bin/python collector.py candles EURUSD EURUSD-OTC --interval 60 --hours 2 || cycle_status=1
   .venv/bin/python collector.py payouts || cycle_status=1
+  # Monitoring only: the health report (logs/health.json) never changes the
+  # cycle exit status - LastExitStatus stays a pure collection-health signal.
+  .venv/bin/python health_report.py || true
   echo "=== cycle exit status: $cycle_status ==="
 } >> logs/collector.log 2>&1
 exit $cycle_status
