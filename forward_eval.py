@@ -15,13 +15,15 @@ Two independent evidence tracks, reported together:
              are therefore immune to every hindsight bias.
 
 Hypotheses evaluated (see FORWARD_TEST.md):
-  H2 primary   ev_margin 0.03
-  H2 secondary ev_margin 0.04 (registered policy variant)
-  H3           H2 primary signals filtered by meta_p >= 0.60
+  H3           PRIMARY - H2 primary signals filtered by meta_p >= 0.60
+  H2 primary   secondary - ev_margin 0.03
+  H2 secondary secondary - ev_margin 0.04 (registered policy variant)
 
 Success (pre-committed, identical for each): cluster mean win fraction
 above break-even at the payout actually observed, one-sided t-test
-p < 0.05, and at least 20 clusters (>= 30 for the candles track).
+p < ALPHA, and at least 20 clusters (>= 30 for the candles track).
+ALPHA is Bonferroni-corrected for the four tests sharing this one forward
+window, so it is 0.0125, not 0.05.
 """
 
 import argparse
@@ -42,6 +44,9 @@ from train import decide_action
 
 PROJECT_DIR = Path(__file__).resolve().parent
 H2_PRIMARY_MARGIN = 0.03
+# Four pre-registered tests share one forward window; Bonferroni keeps the
+# family-wise error at 5%. H3 is the single primary hypothesis.
+ALPHA = 0.05 / 4
 H2_SECONDARY_MARGIN = 0.04
 H3_META_THRESHOLD = 0.60
 MIN_CLUSTERS_CANDLES = 30
@@ -99,7 +104,7 @@ def verdict(stats_dict: dict, min_clusters: int) -> str:
     if stats_dict["clusters"] < min_clusters:
         return f"INCONCLUSIVE - {stats_dict['clusters']} clusters < {min_clusters} required"
     beats = stats_dict["cluster_win_frac"] > stats_dict["breakeven"]
-    sig = stats_dict["p_one_sided"] is not None and stats_dict["p_one_sided"] < 0.05
+    sig = stats_dict["p_one_sided"] is not None and stats_dict["p_one_sided"] < ALPHA
     return "PASS" if (beats and sig) else "FAIL"
 
 

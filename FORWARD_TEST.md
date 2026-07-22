@@ -117,6 +117,50 @@ market regime in it - this is not a 2026-specific artifact. Remaining gaps
 to live profitability are execution-side: histdata carries no spread, and
 IQ Option's book/fills may differ. The forward test remains the referee.
 
+## Range-volatility ablation (2026-07-22, decade histdata, --extra-vol)
+
+Adding gk_vol/rs_vol/park_vol/cs_spread/vol_of_vol to v1.3.0, independent
+gated-trade win rate, baseline -> with extra_vol:
+
+| pair | ev 0.02 | ev 0.03 | ev 0.04 |
+|---|---|---|---|
+| EURUSD | 56.9 -> 57.4 | 57.6 -> 58.2 | 58.6 -> 59.3 |
+| GBPUSD | 56.4 -> 57.0 | 57.3 -> 57.9 | 58.9 -> 59.9 |
+| USDJPY | 55.7 -> 56.6 | 56.6 -> 58.1 | 58.1 -> 58.7 |
+
+9/9 comparisons improve (+0.5 to +1.5, mean ~+0.7) across three
+independent pairs and a decade each - a real effect, not a single-pair
+fluke. Trade count falls ~15% (the features make the model more selective).
+
+Counter-evidence, recorded deliberately: cross-asset CLUSTER win fraction
+falls on all three pairs (-0.4, -1.4, -0.3). The two metrics estimate
+different things - independent-trade win rate models "trade one at a time
+per asset", which is how we would actually trade, while the cluster metric
+weights each burst equally and exists as a significance guard. The
+divergence means extra_vol wins more of the trades we would take but
+reshapes burst structure slightly unfavourably. Adopted as a candidate,
+NOT retrofitted into the frozen H2/H3 models.
+
+## Hypothesis #4 (registered 2026-07-22, before any forward data existed)
+
+H2's configuration plus the extra_vol feature block, same primary gate
+(ev_margin 0.03), same success criterion. Requires its own frozen model
+(live_model_build.py --extra-vol) before the forward window is scored.
+
+## MULTIPLICITY CORRECTION (registered 2026-07-22)
+
+Four pre-registered tests now share ONE forward window (H2 primary, H2
+secondary, H3, H4). Testing four hypotheses at p < 0.05 gives roughly a
+19% chance that at least one passes by luck alone. To keep the family-wise
+error at 5%, each test must clear the Bonferroni threshold
+
+    p < 0.05 / 4 = 0.0125
+
+H3 (meta-filtered) is designated the SINGLE PRIMARY hypothesis; the other
+three are secondary and reported for information. A secondary passing
+while H3 fails is NOT a green light to trade - it is a new hypothesis
+requiring its own fresh forward window.
+
 ## Notes
 
 - Real execution frictions (spread at entry, expiry timing, requotes) are
