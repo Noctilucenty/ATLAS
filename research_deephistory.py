@@ -21,7 +21,7 @@ import pandas as pd
 from scipy import stats
 from sklearn.metrics import brier_score_loss
 
-from features import FEATURE_COLUMNS, build_features
+from features import EXTRA_VOL_COLUMNS, FEATURE_COLUMNS, build_features
 from research_pooled import evaluate_margin
 from train import ChronoCalibratedModel
 
@@ -91,6 +91,8 @@ def main() -> None:
     parser.add_argument("--payout", type=float, default=0.87)
     parser.add_argument("--ev-margins", default="0.02,0.03,0.04")
     parser.add_argument("--entry-next-open", action="store_true")
+    parser.add_argument("--extra-vol", action="store_true",
+                        help="add range-based volatility + Corwin-Schultz spread features")
     parser.add_argument("--cache-dir", default="histdata_cache")
     parser.add_argument("--dump-preds", default=None,
                         help="write all (pair, ts, p_up, label) test predictions to this JSON path")
@@ -106,12 +108,14 @@ def main() -> None:
           flush=True)
 
     ff = build_features(
-        candles, interval=60, horizon=args.horizon, entry_next_open=args.entry_next_open
+        candles, interval=60, horizon=args.horizon,
+        entry_next_open=args.entry_next_open, extra_vol=args.extra_vol,
     ).dropna(subset=["label_up"]).reset_index(drop=True)
     print(f"labeled rows={len(ff)}", flush=True)
 
     purge_s = args.horizon * 60
-    X, y = ff[FEATURE_COLUMNS], ff["label_up"]
+    feature_cols = list(FEATURE_COLUMNS) + (EXTRA_VOL_COLUMNS if args.extra_vol else [])
+    X, y = ff[feature_cols], ff["label_up"]
     ts = ff["to_ts"].to_numpy()
     edges = np.linspace(ts[0], ts[-1], args.splits + 2)
     briers, preds = [], []

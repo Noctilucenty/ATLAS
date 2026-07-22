@@ -26,8 +26,24 @@ ATR_PERIOD = 14
 ADX_PERIOD = 14
 BB_WINDOW = 20
 VOLUME_WINDOW = 20
+VOL_ESTIMATOR_WINDOW = 30  # trailing bars for range-based volatility rates
 REGIME_WINDOW = 480  # trailing bars for the volatility-percentile regime
 SLOPE_LAG = 3
+
+# Optional research features (build_features(extra_vol=True)). Range-based
+# volatility estimators use the whole OHLC bar instead of close-to-close, so
+# they are far more efficient per observation (Garman-Klass ~7x vs
+# close-to-close; Parkinson/Rogers-Satchell similar family). cs_spread is the
+# Corwin-Schultz high-low bid-ask spread proxy - the only microstructure
+# signal recoverable without tick or order-book data. Off by default so the
+# frozen H2/H3 models keep their exact v1.3.0 input contract.
+EXTRA_VOL_COLUMNS = [
+    "gk_vol",
+    "rs_vol",
+    "park_vol",
+    "cs_spread",
+    "vol_of_vol",
+]
 
 FEATURE_COLUMNS = [
     "ret_1",
@@ -84,6 +100,57 @@ def _mtf_trend(df: pd.DataFrame, interval: int, factor: int) -> pd.Series:
     return merged["trend"]
 
 
+def _range_vol_features(
+    out: pd.DataFrame,
+    open_: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    window: int = VOL_ESTIMATOR_WINDOW,
+) -> None:
+    """Range-based volatility estimators + Corwin-Schultz spread proxy.
+
+    Every term uses only the current bar's own OHLC and earlier bars, so row
+    t stays causal. Estimators are per-bar variances, averaged over a
+    trailing window, then square-rooted and divided by close to give
+    dimensionless rates comparable across pairs (JPY crosses included)."""
+    log_hl = np.log(high / low)
+    log_co = np.log(close / open_)
+
+    park_var = log_hl**2 / (4.0 * np.log(2.0))
+    gk_var = 0.5 * log_hl**2 - (2.0 * np.log(2.0) - 1.0) * log_co**2
+    rs_var = (
+        np.log(high / close) * np.log(high / open_)
+        + np.log(low / close) * np.log(low / open_)
+    )
+
+    def _rate(var: pd.Series) -> pd.Series:
+        mean = var.rolling(window).mean().clip(lower=0.0)
+        return np.sqrt(mean)
+
+    out["park_vol"] = _rate(park_var)
+    out["gk_vol"] = _rate(gk_var)
+    out["rs_vol"] = _rate(rs_var)
+
+    # Corwin-Schultz: volatility scales with sqrt(time) but spread does not,
+    # so comparing one-bar and two-bar ranges separates them.
+    hi2 = high.rolling(2).max()
+    lo2 = low.rolling(2).min()
+    beta = (log_hl**2).rolling(2).sum()
+    gamma = np.log(hi2 / lo2) ** 2
+    k = 3.0 - 2.0 * np.sqrt(2.0)
+    alpha = (np.sqrt(2.0 * beta) - np.sqrt(beta)) / k - np.sqrt(gamma / k)
+    spread = 2.0 * (np.exp(alpha) - 1.0) / (1.0 + np.exp(alpha))
+    # Negative estimates are noise around a zero spread; the estimator's
+    # standard treatment is to floor them at zero.
+    out["cs_spread"] = spread.clip(lower=0.0).rolling(window).mean()
+
+    # Volatility-of-volatility: unstable vol regimes are where short-horizon
+    # direction models historically degrade.
+    gk_rate = out["gk_vol"]
+    out["vol_of_vol"] = gk_rate.rolling(window).std() / gk_rate.rolling(window).mean()
+
+
 def split_contiguous(df: pd.DataFrame, interval: int) -> list[pd.DataFrame]:
     """Split a candle frame into maximal contiguous segments at gap boundaries."""
     df = df.reset_index(drop=True)
@@ -103,6 +170,7 @@ def build_features(
     interval: int = 60,
     horizon: int = 5,
     entry_next_open: bool = False,
+    extra_vol: bool = False,
 ) -> pd.DataFrame:
     """Compute the curated feature set plus the forward label, gap-aware.
 
@@ -117,19 +185,27 @@ def build_features(
     feature_version. Warmup rows with undefined features are dropped."""
     segments = split_contiguous(df, interval)
     parts = [
-        _build_features_segment(segment, interval, horizon, entry_next_open)
+        _build_features_segment(segment, interval, horizon, entry_next_open, extra_vol)
         for segment in segments
     ]
     parts = [p for p in parts if not p.empty]
     if not parts:
+        extra = EXTRA_VOL_COLUMNS if extra_vol else []
         return pd.DataFrame(
-            columns=["from_ts", "to_ts", *FEATURE_COLUMNS, "label_up", "feature_version"]
+            columns=[
+                "from_ts", "to_ts", *FEATURE_COLUMNS, *extra,
+                "label_up", "feature_version",
+            ]
         )
     return pd.concat(parts, ignore_index=True)
 
 
 def _build_features_segment(
-    df: pd.DataFrame, interval: int, horizon: int, entry_next_open: bool = False
+    df: pd.DataFrame,
+    interval: int,
+    horizon: int,
+    entry_next_open: bool = False,
+    extra_vol: bool = False,
 ) -> pd.DataFrame:
     # Segments shorter than indicator warmup can't yield any feature row and
     # crash ta's ATR/ADX outright (ADX needs ~2x its window); they
@@ -213,4 +289,8 @@ def _build_features_segment(
     )
 
     out["feature_version"] = FEATURE_VERSION
-    return out.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
+    required = list(FEATURE_COLUMNS)
+    if extra_vol:
+        _range_vol_features(out, open_, high, low, close)
+        required += EXTRA_VOL_COLUMNS
+    return out.dropna(subset=required).reset_index(drop=True)

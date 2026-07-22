@@ -211,6 +211,7 @@ def main() -> int:
                 continue
             profits = live_quotes(client)
             p_up = model.predict_proba_up(frame[feature_cols])
+            fired = 0
             for (_, row), p in zip(frame.iterrows(), p_up):
                 asset = row["asset"]
                 spec = INSTRUMENTS[asset]
@@ -249,6 +250,16 @@ def main() -> int:
                 with open(log_path, "a") as fh:
                     fh.write(json.dumps(record) + "\n")
                 print(json.dumps(record), flush=True)
+                fired += 1
+            # Heartbeat: an idle cycle and a broken one look identical in the
+            # signal log, so record that the model really did evaluate.
+            with open(log_path.with_name("live_h2_heartbeat.jsonl"), "a") as fh:
+                fh.write(json.dumps({
+                    "ts": cycle_ts,
+                    "assets": len(frame),
+                    "max_conf": round(float(np.max(np.abs(p_up - 0.5))), 4),
+                    "signals": fired,
+                }) + "\n")
         except Exception as exc:
             print(f"WARN cycle: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
 

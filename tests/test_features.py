@@ -137,3 +137,30 @@ def test_tiny_segments_are_skipped_not_crashed():
     frame.loc[4:, "to_ts"] += 3600
     out = build_features(frame, horizon=5)
     assert len(out) == 0
+
+
+def test_extra_vol_features_are_optional_and_causal():
+    """extra_vol=True adds range-based estimators without disturbing the
+    default contract, and row t must never use rows after t."""
+    from features import EXTRA_VOL_COLUMNS
+
+    frame = make_frame(wave())
+    base = build_features(frame, horizon=5)
+    assert not any(c in base.columns for c in EXTRA_VOL_COLUMNS)
+
+    full = build_features(frame, horizon=5, extra_vol=True)
+    for col in EXTRA_VOL_COLUMNS:
+        assert col in full.columns, col
+    assert not full[EXTRA_VOL_COLUMNS].isna().any().any()
+    assert (full["cs_spread"] >= 0).all()
+    assert (full[["gk_vol", "rs_vol", "park_vol"]] >= 0).all().all()
+
+    # Truncating the input must not change the surviving rows' values.
+    cut = 700
+    truncated = build_features(frame.iloc[:cut].copy(), horizon=5, extra_vol=True)
+    shared = full[full["to_ts"].isin(truncated["to_ts"])]
+    merged = truncated.merge(shared, on="to_ts", suffixes=("_t", "_f"))
+    for col in EXTRA_VOL_COLUMNS:
+        pd.testing.assert_series_equal(
+            merged[f"{col}_t"], merged[f"{col}_f"], check_names=False
+        )
