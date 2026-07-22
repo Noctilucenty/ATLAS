@@ -14,7 +14,10 @@ mkdir -p logs
 cycle_status=0
 {
   echo "=== cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
-  .venv/bin/python collector.py candles EURUSD EURUSD-OTC GBPUSD GBPUSD-OTC USDJPY USDJPY-OTC AUDUSD EURGBP-OTC EURJPY EURJPY-OTC AUDCAD-OTC GBPJPY-OTC NZDUSD-OTC USDCHF-OTC USDSGD-OTC USDZAR-OTC --interval 60 --hours 2 || cycle_status=1
+  # Asset list comes from instruments.py so the registry is the single
+  # source of truth and cannot drift from what we actually collect.
+  ASSETS=$(.venv/bin/python -c "from instruments import INSTRUMENTS; print(' '.join(INSTRUMENTS))")
+  .venv/bin/python collector.py candles ${=ASSETS} --interval 60 --hours 2 || cycle_status=1
   .venv/bin/python collector.py payouts || cycle_status=1
   # Monitoring only: the health report (logs/health.json) never changes the
   # cycle exit status - LastExitStatus stays a pure collection-health signal.

@@ -24,6 +24,10 @@ class InstrumentSpec:
     order_active: str   # buy() ACTIVES key
     option_kind: str    # 'turbo' or 'binary'
     expiry_minutes: int
+    # Data-only instruments are collected for cross-asset context (currency
+    # strength) but have no option market, so they are never traded and are
+    # excluded from payout-health checks.
+    tradable: bool = True
 
 
 INSTRUMENTS: dict[str, InstrumentSpec] = {
@@ -141,6 +145,97 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
         candle_asset="USDZAR-OTC",
         quote_key="USDZAR-OTC",
         order_active="USDZAR-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    # Batch 3, verified live 2026-07-22: candle fetch tested per asset and
+    # quote keys read from a live get_all_profit. Spot pairs quote under
+    # '<PAIR>-op'; USDCAD/EURAUD have no turbo market, only binary.
+    "NZDUSD": InstrumentSpec(
+        candle_asset="NZDUSD",
+        quote_key="NZDUSD-op",
+        order_active="NZDUSD",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDCAD": InstrumentSpec(
+        candle_asset="USDCAD",
+        quote_key="USDCAD-op",
+        order_active="USDCAD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    # USDCHF spot: candles fetch fine but the broker quotes no option market
+    # for it (no USDCHF-op key), so it is collected for CHF-strength context
+    # only and never traded.
+    "USDCHF": InstrumentSpec(
+        candle_asset="USDCHF",
+        quote_key="USDCHF-op",
+        order_active="USDCHF",
+        option_kind="turbo",
+        expiry_minutes=1,
+        tradable=False,
+    ),
+    "GBPJPY": InstrumentSpec(
+        candle_asset="GBPJPY",
+        quote_key="GBPJPY-op",
+        order_active="GBPJPY",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "AUDJPY": InstrumentSpec(
+        candle_asset="AUDJPY",
+        quote_key="AUDJPY-op",
+        order_active="AUDJPY",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "EURCHF": InstrumentSpec(
+        candle_asset="EURCHF",
+        quote_key="EURCHF-op",
+        order_active="EURCHF",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "GBPCHF": InstrumentSpec(
+        candle_asset="GBPCHF",
+        quote_key="GBPCHF-op",
+        order_active="GBPCHF",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "EURGBP": InstrumentSpec(
+        candle_asset="EURGBP",
+        quote_key="EURGBP-op",
+        order_active="EURGBP",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "AUDCAD": InstrumentSpec(
+        candle_asset="AUDCAD",
+        quote_key="AUDCAD-op",
+        order_active="AUDCAD",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "EURAUD": InstrumentSpec(
+        candle_asset="EURAUD",
+        quote_key="EURAUD-op",
+        order_active="EURAUD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "USDHKD-OTC": InstrumentSpec(
+        candle_asset="USDHKD-OTC",
+        quote_key="USDHKD-OTC",
+        order_active="USDHKD-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDINR-OTC": InstrumentSpec(
+        candle_asset="USDINR-OTC",
+        quote_key="USDINR-OTC",
+        order_active="USDINR-OTC",
         option_kind="turbo",
         expiry_minutes=1,
     ),

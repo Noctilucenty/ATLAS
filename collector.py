@@ -105,7 +105,9 @@ def missing_required_payouts(profits: dict) -> list[str]:
     unhealthy no matter how large payout_rows is."""
     from instruments import INSTRUMENTS
 
-    required = sorted({(s.quote_key, s.option_kind) for s in INSTRUMENTS.values()})
+    required = sorted(
+        {(s.quote_key, s.option_kind) for s in INSTRUMENTS.values() if s.tradable}
+    )
     return [
         f"{key}/{kind}"
         for key, kind in required

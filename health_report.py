@@ -180,7 +180,9 @@ def build_report(
             warnings.append(f"{asset}: {len(hist_report['gaps'])} historical gap(s) in canonical history")
         if last_candle_age > STALE_CANDLE_S:
             warnings.append(f"{asset}: latest candle is {last_candle_age}s old (stale, > {STALE_CANDLE_S}s)")
-        if hist_report["conflicts"] or not in_latest_batch:
+        # Data-only instruments have no option market, so a missing payout
+        # quote is expected for them and must not fail collection health.
+        if hist_report["conflicts"] or (not in_latest_batch and spec.tradable):
             report["healthy"] = False
 
     if statuses and statuses[-1] != 0:

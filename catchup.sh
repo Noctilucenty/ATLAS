@@ -26,9 +26,8 @@ except Exception:
 PY
 )}
 
-ASSETS=(EURUSD EURUSD-OTC GBPUSD GBPUSD-OTC USDJPY USDJPY-OTC AUDUSD
-        EURGBP-OTC EURJPY EURJPY-OTC AUDCAD-OTC GBPJPY-OTC NZDUSD-OTC
-        USDCHF-OTC USDSGD-OTC USDZAR-OTC)
+# Registry is the single source of truth for what we collect.
+ASSETS=(${=$(.venv/bin/python -c "from instruments import INSTRUMENTS; print(' '.join(INSTRUMENTS))")})
 
 echo "[$(date -u +%H:%MZ)] backfilling ${HOURS}h for ${#ASSETS} instruments..."
 .venv/bin/python collector.py candles $ASSETS --interval 60 --hours $HOURS \

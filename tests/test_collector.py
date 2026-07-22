@@ -110,8 +110,8 @@ def test_otc_spec_is_fully_self_keyed():
 def test_unknown_instrument_raises_with_known_list():
     import pytest
 
-    with pytest.raises(KeyError, match="GBPJPY"):
-        get_instrument("GBPJPY")
+    with pytest.raises(KeyError, match="XAUUSD"):
+        get_instrument("XAUUSD")   # deliberately unregistered
     assert "EURUSD" in INSTRUMENTS
 
 
@@ -143,12 +143,27 @@ def test_payout_snapshot_health_requires_every_quote_key():
     for spec in INSTRUMENTS.values():
         healthy.setdefault(spec.quote_key, {})[spec.option_kind] = 0.85
     assert missing_required_payouts(healthy) == []
-    # Hundreds of rows without the required keys is still unhealthy.
+    # Hundreds of rows without the required keys is still unhealthy. Only
+    # tradable instruments are required - data-only ones have no quote.
     required = sorted(
-        f"{s.quote_key}/{s.option_kind}" for s in set(INSTRUMENTS.values())
+        f"{s.quote_key}/{s.option_kind}" for s in set(INSTRUMENTS.values()) if s.tradable
     )
     assert missing_required_payouts({"GBPAUD-op": {"binary": 0.87}}) == required
     # Wrong kind under the right key does not count.
     broken = {k: dict(v) for k, v in healthy.items()}
     broken["EURUSD-op"] = {"binary": 0.88}
     assert "EURUSD-op/turbo" in missing_required_payouts(broken)
+
+
+def test_data_only_instruments_are_exempt_from_payout_health():
+    """A data-only instrument (no option market) must not make an otherwise
+    complete payout batch look unhealthy."""
+    from collector import missing_required_payouts
+    from instruments import INSTRUMENTS
+
+    complete = {}
+    for spec in INSTRUMENTS.values():
+        if spec.tradable:
+            complete.setdefault(spec.quote_key, {})[spec.option_kind] = 0.85
+    assert missing_required_payouts(complete) == []
+    assert any(not s.tradable for s in INSTRUMENTS.values()), "fixture needs a data-only spec"
