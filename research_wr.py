@@ -81,6 +81,43 @@ def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str) -> dict:
             "importances": importances}
 
 
+def compute_pooled(pairs: list, horizon: int, splits: int, cache_dir: str) -> dict:
+    """Global model: ONE LightGBM per fold trained on ALL pairs pooled, then
+    predicting each pair's test rows. Time-purged folds cut on to_ts. Returns
+    the same bundle shape as compute_pair so aggregate() compares specialists
+    (per-pair models) against this global model at matched thresholds."""
+    purge_s = horizon * 60
+    parts = []
+    for pair in pairs:
+        candles = load_candles(download_years(pair, range(2016, 2026), Path(cache_dir)))
+        ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True)
+        ff = ff.dropna(subset=["label_up"]).copy()
+        ff["asset"] = pair.upper()
+        parts.append(ff)
+    pooled = pd.concat(parts, ignore_index=True).sort_values("to_ts").reset_index(drop=True)
+    ts = pooled["to_ts"].to_numpy()
+    edges = np.linspace(ts[0], ts[-1], splits + 2)
+    n_assets = pooled["asset"].nunique()
+
+    preds, importances = [], []
+    for k in range(1, splits + 1):
+        te = np.where((ts > edges[k]) & (ts <= edges[k + 1]))[0]
+        tr = np.where(ts <= edges[k] - purge_s)[0]
+        if not len(te) or len(tr) < 10000:
+            continue
+        model = ChronoCalibratedModel(n_folds=3, gap=horizon * n_assets, model_kind="lgbm")
+        model.fit(pooled[FEATURE_COLUMNS].iloc[tr], pooled["label_up"].iloc[tr])
+        base = getattr(model, "base_", None)
+        if base is not None and hasattr(base, "feature_importances_"):
+            importances.append(dict(zip(FEATURE_COLUMNS, base.feature_importances_)))
+        sub = pooled.iloc[te].copy()
+        sub["p_up"] = model.predict_proba_up(pooled[FEATURE_COLUMNS].iloc[te])
+        preds.append(sub)
+        print(f"  pooled fold {k}", flush=True)
+    return {"pair": "POOLED", "preds": pd.concat(preds, ignore_index=True),
+            "importances": importances}
+
+
 def independent(trades: pd.DataFrame, purge_s: int) -> pd.DataFrame:
     keep, last = [], {}
     for row in trades.sort_values("ts").itertuples():
@@ -201,6 +238,8 @@ def aggregate(bundles: list, horizon: int, payout: float, min_holdout: int) -> d
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--compute-pooled", action="store_true",
+                    help="global model: train pooled over --pairs, pickle to --dump")
     ap.add_argument("--compute-pair", default=None, help="compute one pair and pickle to --dump")
     ap.add_argument("--dump", default=None)
     ap.add_argument("--aggregate", default=None, help="glob of pair pickles to analyse")
@@ -212,6 +251,13 @@ def main() -> None:
     ap.add_argument("--cache-dir", default="histdata_cache")
     ap.add_argument("--out", default="research_logs/wr_report.json")
     args = ap.parse_args()
+
+    if args.compute_pooled:
+        bundle = compute_pooled(args.pairs.split(","), args.horizon, args.splits, args.cache_dir)
+        with open(args.dump, "wb") as fh:
+            pickle.dump(bundle, fh)
+        print(f"dumped POOLED -> {args.dump}")
+        return
 
     if args.compute_pair:
         bundle = compute_pair(args.compute_pair, args.horizon, args.splits, args.cache_dir)
