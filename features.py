@@ -52,10 +52,14 @@ EXTRA_VOL_COLUMNS = [
 # term structure. The ratios matter more than the levels here - they say
 # whether volatility is currently elevated or suppressed relative to its own
 # recent history, which is a regime signal rather than a scale.
+# Windows are 15m/1h/4h rather than the classic 1h/1d/1w: 1-minute FX data
+# is fragmented into short contiguous segments (median 24 bars in histdata),
+# and a 1-day window discards 85% of rows to warmup - a cost no feature can
+# repay. 4h retains 75%.
 EXTRA_HAR_COLUMNS = [
+    "rv_15m",
     "rv_1h",
     "rv_4h",
-    "rv_1d",
     "rv_ratio_short",
     "rv_ratio_long",
 ]
@@ -182,16 +186,16 @@ def _har_features(out: pd.DataFrame, close: pd.Series, interval: int) -> None:
         # computing a rate from a handful of observations.
         return np.sqrt(sq.rolling(bars, min_periods=bars).mean())
 
+    rv_15m = _rv(max(per_hour // 4, 2))
     rv_1h = _rv(per_hour)
     rv_4h = _rv(per_hour * 4)
-    rv_1d = _rv(per_hour * 24)
+    out["rv_15m"] = rv_15m
     out["rv_1h"] = rv_1h
     out["rv_4h"] = rv_4h
-    out["rv_1d"] = rv_1d
     # Term-structure ratios: >1 means short-horizon volatility is running hot
     # relative to the longer window.
-    out["rv_ratio_short"] = rv_1h / rv_4h.replace(0.0, np.nan)
-    out["rv_ratio_long"] = rv_4h / rv_1d.replace(0.0, np.nan)
+    out["rv_ratio_short"] = rv_15m / rv_1h.replace(0.0, np.nan)
+    out["rv_ratio_long"] = rv_1h / rv_4h.replace(0.0, np.nan)
 
 
 def split_contiguous(df: pd.DataFrame, interval: int) -> list[pd.DataFrame]:

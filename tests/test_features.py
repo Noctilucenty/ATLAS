@@ -176,17 +176,17 @@ def test_har_features_are_optional_and_causal():
     the default contract, and row t must not use rows after t."""
     from features import EXTRA_HAR_COLUMNS
 
-    # A day of RV needs 1440 bars, so the fixture must exceed that.
-    frame = make_frame(wave(2000))
+    # The longest RV window is 4h = 240 bars; the fixture must exceed that.
+    frame = make_frame(wave(900))
     base = build_features(frame, horizon=5)
     assert not any(c in base.columns for c in EXTRA_HAR_COLUMNS)
 
     full = build_features(frame, horizon=5, extra_har=True)
     assert len(full) > 0, "1d RV window should still leave usable rows"
     assert not full[EXTRA_HAR_COLUMNS].isna().any().any()
-    assert (full[["rv_1h", "rv_4h", "rv_1d"]] >= 0).all().all()
+    assert (full[["rv_15m", "rv_1h", "rv_4h"]] >= 0).all().all()
 
-    truncated = build_features(frame.iloc[:1800].copy(), horizon=5, extra_har=True)
+    truncated = build_features(frame.iloc[:700].copy(), horizon=5, extra_har=True)
     merged = truncated.merge(full, on="to_ts", suffixes=("_t", "_f"))
     assert len(merged) > 0
     for col in EXTRA_HAR_COLUMNS:
