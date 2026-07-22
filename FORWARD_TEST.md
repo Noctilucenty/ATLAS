@@ -141,6 +141,29 @@ divergence means extra_vol wins more of the trades we would take but
 reshapes burst structure slightly unfavourably. Adopted as a candidate,
 NOT retrofitted into the frozen H2/H3 models.
 
+## Rejected levers (2026-07-22) - recorded so they are not re-tried
+
+Both tested on decade EURUSD, identical machinery and row counts.
+
+ENSEMBLE (3-seed LGBM + logreg averaging): independent win rate 56.6 / 57.3
+/ 59.0 vs baseline 56.9 / 57.6 / 58.6 - no win-rate gain. Cluster win
+fraction 70.1 vs 67.5 and 25% more trades at equal accuracy. NOT adopted as
+a win-rate lever; its real value is statistical power, which is worth
+revisiting only if the forward window returns INCONCLUSIVE for lack of
+trades.
+
+HAR-RV realized-volatility term structure: 57.1 / 57.2 / 58.8 vs baseline
+56.9 / 57.6 / 58.6 - a wash on win rate, worse cluster fraction (65.2 vs
+67.5), worse Brier, and 43% fewer trades. REJECTED. Volatility forecasting
+predicts magnitude, not direction, and the data agrees with the theory.
+
+Methodology note: the FIRST HAR run appeared to be a decisive loss (55.3% at
+the primary gate) and matched the prediction made before running it. It was
+invalid - a 1-day RV window needs 1440 contiguous bars and this data
+fragments into 12,117 segments with median length 24, so 85% of rows were
+lost to warmup and the model trained on 530k rows against 2.48M. A result
+that confirms a prior is exactly when the mechanism deserves checking.
+
 ## Hypothesis #4 (registered 2026-07-22, before any forward data existed)
 
 H2's configuration plus the extra_vol feature block, same primary gate
