@@ -27,7 +27,7 @@ import pandas as pd
 from scipy import stats
 from sklearn.metrics import brier_score_loss
 
-from features import FEATURE_COLUMNS, build_features
+from features import EXTRA_VOL_COLUMNS, FEATURE_COLUMNS, build_features
 from instruments import INSTRUMENTS
 from storage import load_canonical_history, open_db
 from train import ChronoCalibratedModel, decide_action
@@ -40,14 +40,21 @@ def currencies(asset: str) -> tuple[str, str]:
     return pair[:3], pair[3:6]
 
 
-def load_pooled(conn, interval: int, horizon: int, entry_next_open: bool) -> pd.DataFrame:
+def load_pooled(
+    conn,
+    interval: int,
+    horizon: int,
+    entry_next_open: bool,
+    extra_vol: bool = False,
+) -> pd.DataFrame:
     parts = []
     for asset in INSTRUMENTS:
         candles, _ = load_canonical_history(conn, asset, interval)
         if candles.empty:
             continue
         ff = build_features(
-            candles, interval=interval, horizon=horizon, entry_next_open=entry_next_open
+            candles, interval=interval, horizon=horizon,
+            entry_next_open=entry_next_open, extra_vol=extra_vol,
         )
         ff["asset"] = asset
         parts.append(ff)
@@ -165,16 +172,23 @@ def main() -> None:
                         help="add currency-strength basket features")
     parser.add_argument("--entry-next-open", action="store_true",
                         help="realistic-execution labels (strike = next bar open)")
+    parser.add_argument("--extra-vol", action="store_true",
+                        help="hypothesis #4: add the range-volatility feature block")
     parser.add_argument("--dump-trades", default=None,
                         help="write (asset, ts, p_up, label) predictions to this JSON path")
     args = parser.parse_args()
 
     purge_s = args.horizon * args.interval
-    pooled = load_pooled(open_db(), args.interval, args.horizon, args.entry_next_open)
+    pooled = load_pooled(
+        open_db(), args.interval, args.horizon, args.entry_next_open,
+        extra_vol=args.extra_vol,
+    )
     feature_cols = list(FEATURE_COLUMNS)
     if args.cross_asset:
         pooled = add_cross_asset(pooled)
         feature_cols += XS_COLUMNS
+    if args.extra_vol:
+        feature_cols += EXTRA_VOL_COLUMNS
     print(f"pooled rows={len(pooled)} assets={pooled['asset'].nunique()} "
           f"features={len(feature_cols)} entry_next_open={args.entry_next_open}", flush=True)
 
