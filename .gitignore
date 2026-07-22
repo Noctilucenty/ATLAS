@@ -11,3 +11,5 @@ runs/
 histdata_cache/
 models/
 research_logs/
+.last_catchup
+.catchup_lock

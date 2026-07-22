@@ -1,27 +1,47 @@
 #!/bin/zsh
-# Backfill everything the collector missed while this Mac was off.
+# Backfill exactly what this Mac missed while it was off, then snapshot payouts.
 #
 # IQ Option serves ~60 days of 1-minute history on demand, so candles are
-# retroactively recoverable: running this once a week captures every minute,
-# and the forward test's candles track needs nothing else. Only payout
-# snapshots are point-in-time and unrecoverable - this grabs one per run.
+# retroactively recoverable and continuous uptime is unnecessary. This reads
+# the newest stored candle and fetches only the hours since (plus a small
+# overlap; the canonical history merge deduplicates). Only payout snapshots
+# are point-in-time and unrecoverable, so one is taken per run.
 #
-# Usage:  ./catchup.sh [hours]     (default 168 = 7 days)
-# Safe to over-request: the canonical history merge deduplicates.
+# Usage:  ./catchup.sh [hours]   - hours overrides the auto-detected gap
 cd "$(dirname "$0")"
-HOURS=${1:-168}
-mkdir -p logs
+mkdir -p logs research_logs
+
+# Auto-detect the gap. Falls back to 168h if the DB is locked or missing.
+HOURS=${1:-$(.venv/bin/python - <<'PY' 2>/dev/null || echo 168
+import duckdb, time, math
+try:
+    con = duckdb.connect("market.duckdb", read_only=True)
+    latest = con.sql("SELECT max(from_ts) FROM candles").fetchone()[0]
+    gap_h = (time.time() - latest) / 3600
+    # +2h overlap covers the partially-collected boundary hour; the broker
+    # only retains ~60 days, so asking for more than that is wasted work.
+    print(min(max(math.ceil(gap_h) + 2, 2), 1400))
+except Exception:
+    print(168)
+PY
+)}
+
 ASSETS=(EURUSD EURUSD-OTC GBPUSD GBPUSD-OTC USDJPY USDJPY-OTC AUDUSD
         EURGBP-OTC EURJPY EURJPY-OTC AUDCAD-OTC GBPJPY-OTC NZDUSD-OTC
         USDCHF-OTC USDSGD-OTC USDZAR-OTC)
-echo "backfilling ${HOURS}h for ${#ASSETS} instruments..."
+
+echo "[$(date -u +%H:%MZ)] backfilling ${HOURS}h for ${#ASSETS} instruments..."
 .venv/bin/python collector.py candles $ASSETS --interval 60 --hours $HOURS \
-  >> logs/catchup.log 2>&1 || echo "WARN: some candle fetches failed (see logs/catchup.log)"
+  >> logs/catchup.log 2>&1 || echo "WARN: some candle fetches failed (logs/catchup.log)"
 .venv/bin/python collector.py payouts >> logs/catchup.log 2>&1 \
   || echo "WARN: payout snapshot failed"
-.venv/bin/python -c "
+
+.venv/bin/python - <<'PY'
 import duckdb, time
-con = duckdb.connect('market.duckdb', read_only=True)
-n, latest = con.sql('SELECT count(*), max(from_ts) FROM candles').fetchone()
-print(f'candles: {n:,}  newest {(time.time()-latest)/60:.0f} min old')
-"
+con = duckdb.connect("market.duckdb", read_only=True)
+n, latest = con.sql("SELECT count(*), max(from_ts) FROM candles").fetchone()
+snaps = con.sql("SELECT count(*) FROM payout_snapshots").fetchone()[0]
+print(f"candles {n:,} (newest {(time.time()-latest)/60:.0f} min old), "
+      f"payout snapshots {snaps}")
+PY
+date +%s > .last_catchup
