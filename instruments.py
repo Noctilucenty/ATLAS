@@ -41,6 +41,109 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
         option_kind="turbo",
         expiry_minutes=1,
     ),
+    # Majors below verified live 2026-07-21 via iq_payouts: spot pairs quote
+    # under '<PAIR>-op' (turbo + binary), OTC under '<PAIR>-OTC'. USDJPY-OTC
+    # quotes binary only - no turbo market exists for it.
+    "GBPUSD": InstrumentSpec(
+        candle_asset="GBPUSD",
+        quote_key="GBPUSD-op",
+        order_active="GBPUSD",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "GBPUSD-OTC": InstrumentSpec(
+        candle_asset="GBPUSD-OTC",
+        quote_key="GBPUSD-OTC",
+        order_active="GBPUSD-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDJPY": InstrumentSpec(
+        candle_asset="USDJPY",
+        quote_key="USDJPY-op",
+        order_active="USDJPY",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDJPY-OTC": InstrumentSpec(
+        candle_asset="USDJPY-OTC",
+        quote_key="USDJPY-OTC",
+        order_active="USDJPY-OTC",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "AUDUSD": InstrumentSpec(
+        candle_asset="AUDUSD",
+        quote_key="AUDUSD-op",
+        order_active="AUDUSD",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    # AUDUSD-OTC is quoted in payouts but absent from the vendored library's
+    # ACTIVES map (candles unfetchable); EURGBP-OTC is used instead.
+    "EURGBP-OTC": InstrumentSpec(
+        candle_asset="EURGBP-OTC",
+        quote_key="EURGBP-OTC",
+        order_active="EURGBP-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "EURJPY": InstrumentSpec(
+        candle_asset="EURJPY",
+        quote_key="EURJPY-op",
+        order_active="EURJPY",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "EURJPY-OTC": InstrumentSpec(
+        candle_asset="EURJPY-OTC",
+        quote_key="EURJPY-OTC",
+        order_active="EURJPY-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "AUDCAD-OTC": InstrumentSpec(
+        candle_asset="AUDCAD-OTC",
+        quote_key="AUDCAD-OTC",
+        order_active="AUDCAD-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "GBPJPY-OTC": InstrumentSpec(
+        candle_asset="GBPJPY-OTC",
+        quote_key="GBPJPY-OTC",
+        order_active="GBPJPY-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "NZDUSD-OTC": InstrumentSpec(
+        candle_asset="NZDUSD-OTC",
+        quote_key="NZDUSD-OTC",
+        order_active="NZDUSD-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDCHF-OTC": InstrumentSpec(
+        candle_asset="USDCHF-OTC",
+        quote_key="USDCHF-OTC",
+        order_active="USDCHF-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDSGD-OTC": InstrumentSpec(
+        candle_asset="USDSGD-OTC",
+        quote_key="USDSGD-OTC",
+        order_active="USDSGD-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
+    "USDZAR-OTC": InstrumentSpec(
+        candle_asset="USDZAR-OTC",
+        quote_key="USDZAR-OTC",
+        order_active="USDZAR-OTC",
+        option_kind="turbo",
+        expiry_minutes=1,
+    ),
 }
 
 

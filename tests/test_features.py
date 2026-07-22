@@ -116,3 +116,24 @@ def test_real_dataset_if_available():
     out = build_features(candles, horizon=5)
     assert len(out) > 300
     assert not out[FEATURE_COLUMNS].isna().any().any()
+
+
+def test_zero_volume_feed_yields_neutral_vol_rel():
+    """IQ Option OTC candles report volume=0 on every bar; the frame must
+    still produce rows, with vol_rel pinned to the neutral 1.0."""
+    frame = make_frame(wave())
+    frame["volume"] = 0.0
+    out = build_features(frame, horizon=5)
+    assert len(out) > 500
+    assert (out["vol_rel"] == 1.0).all()
+    assert not out[FEATURE_COLUMNS].isna().any().any()
+
+
+def test_tiny_segments_are_skipped_not_crashed():
+    """Contiguous segments shorter than indicator warmup (common in external
+    deep-history data) must contribute nothing rather than crash ta's ATR."""
+    frame = make_frame(wave(30))
+    frame.loc[4:, "from_ts"] += 3600  # gap after 4 bars -> 4-bar segment
+    frame.loc[4:, "to_ts"] += 3600
+    out = build_features(frame, horizon=5)
+    assert len(out) == 0

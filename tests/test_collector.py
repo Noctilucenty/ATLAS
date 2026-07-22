@@ -137,15 +137,18 @@ def test_exit_codes_distinguish_partial_and_total_failure():
 
 def test_payout_snapshot_health_requires_every_quote_key():
     from collector import missing_required_payouts
+    from instruments import INSTRUMENTS
 
-    healthy = {"EURUSD-op": {"turbo": 0.83, "binary": 0.88}, "EURUSD-OTC": {"turbo": 0.86}}
+    healthy = {}
+    for spec in INSTRUMENTS.values():
+        healthy.setdefault(spec.quote_key, {})[spec.option_kind] = 0.85
     assert missing_required_payouts(healthy) == []
     # Hundreds of rows without the required keys is still unhealthy.
-    assert missing_required_payouts({"GBPAUD-op": {"binary": 0.87}}) == [
-        "EURUSD-OTC/turbo",
-        "EURUSD-op/turbo",
-    ]
-    # Wrong kind under the right key does not count.
-    assert "EURUSD-op/turbo" in missing_required_payouts(
-        {"EURUSD-op": {"binary": 0.88}, "EURUSD-OTC": {"turbo": 0.86}}
+    required = sorted(
+        f"{s.quote_key}/{s.option_kind}" for s in set(INSTRUMENTS.values())
     )
+    assert missing_required_payouts({"GBPAUD-op": {"binary": 0.87}}) == required
+    # Wrong kind under the right key does not count.
+    broken = {k: dict(v) for k, v in healthy.items()}
+    broken["EURUSD-op"] = {"binary": 0.88}
+    assert "EURUSD-op/turbo" in missing_required_payouts(broken)

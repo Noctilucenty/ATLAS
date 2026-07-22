@@ -97,3 +97,15 @@ def test_manifest_declares_assumed_payout():
     assert manifest["payout_source"] == "assumed"
     assert manifest["assumed_payout"] == 0.85
     assert manifest["feature_hash"] == feature_hash()
+
+
+def test_lgbm_tuned_walk_forward_runs():
+    """--tune-trials path: Optuna search stays inside training windows and the
+    run completes with tuned params recorded per fold."""
+    result = walk_forward(
+        synthetic_features(), payout=0.85, n_splits=2, model_kind="lgbm", tune_trials=2
+    )
+    assert result["manifest"]["model_version"].startswith("lgbm-")
+    assert result["manifest"]["tune_trials"] == 2
+    for fold in result["folds"]:
+        assert fold["tuned_params"] is None or "learning_rate" in fold["tuned_params"]

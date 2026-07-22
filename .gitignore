@@ -8,3 +8,5 @@ journal.db
 signals_out/
 logs/
 runs/
+histdata_cache/
+models/

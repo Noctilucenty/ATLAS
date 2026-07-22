@@ -33,10 +33,34 @@ from sklearn.preprocessing import StandardScaler
 
 from features import FEATURE_COLUMNS, FEATURE_VERSION, build_features
 
-MODEL_VERSION = "logreg-1.1.0"  # 1.1.0: chronological purged calibration
+MODEL_VERSIONS = {
+    "logreg": "logreg-1.1.0",  # 1.1.0: chronological purged calibration
+    "lgbm": "lgbm-1.0.0",
+}
+MODEL_VERSION = MODEL_VERSIONS["logreg"]  # default model
 
 
-def _base_pipeline():
+LGBM_DEFAULTS = {
+    # Conservative settings for small, noisy 1-minute FX feature tables:
+    # shallow trees, heavy row/column subsampling, high min_child_samples.
+    "n_estimators": 300,
+    "learning_rate": 0.05,
+    "num_leaves": 15,
+    "min_child_samples": 50,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.8,
+    "reg_lambda": 1.0,
+}
+
+
+def _base_pipeline(model_kind: str = "logreg", model_params: dict | None = None):
+    if model_kind == "lgbm":
+        from lightgbm import LGBMClassifier
+
+        return LGBMClassifier(
+            **{**LGBM_DEFAULTS, **(model_params or {})}, random_state=0, verbosity=-1
+        )
     return make_pipeline(
         StandardScaler(), LogisticRegression(C=0.1, max_iter=1000, random_state=0)
     )
@@ -80,9 +104,17 @@ class ChronoCalibratedModel:
     base model is refit on the whole training window. The test window is
     never touched."""
 
-    def __init__(self, n_folds: int = 3, gap: int = 5):
+    def __init__(
+        self,
+        n_folds: int = 3,
+        gap: int = 5,
+        model_kind: str = "logreg",
+        model_params: dict | None = None,
+    ):
         self.n_folds = n_folds
         self.gap = gap
+        self.model_kind = model_kind
+        self.model_params = model_params
 
     def fit(self, X: pd.DataFrame, y: pd.Series):
         self.constant_ = None
@@ -92,12 +124,12 @@ class ChronoCalibratedModel:
             return self
         scores, labels = [], []
         for train_idx, val_idx in chrono_calibration_splits(len(X), self.n_folds, self.gap):
-            base = _base_pipeline()
+            base = _base_pipeline(self.model_kind, self.model_params)
             base.fit(X.iloc[train_idx], y.iloc[train_idx])
             scores.append(_prob_up(base, X.iloc[val_idx]))
             labels.append(y.iloc[val_idx].to_numpy())
 
-        self.base_ = _base_pipeline()
+        self.base_ = _base_pipeline(self.model_kind, self.model_params)
         self.base_.fit(X, y)
 
         self.calibrator_ = None
@@ -116,6 +148,46 @@ class ChronoCalibratedModel:
         if self.calibrator_ is None:
             return raw
         return _prob_up(self.calibrator_, raw.reshape(-1, 1))
+
+
+def tune_lgbm(X: pd.DataFrame, y: pd.Series, gap: int, n_trials: int) -> dict:
+    """Optuna search over LightGBM params, scored ONLY inside the training
+    window: each trial is evaluated by mean Brier over the same chronological
+    purged calibration splits the model itself uses. The walk-forward test
+    window is never seen. Deterministic (seeded TPE sampler)."""
+    import optuna
+    from lightgbm import LGBMClassifier
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    splits = chrono_calibration_splits(len(X), n_folds=3, gap=gap)
+    if not splits or len(np.unique(y)) < 2:
+        return {}
+
+    def objective(trial: "optuna.Trial") -> float:
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 500, step=100),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 7, 63, log=True),
+            "min_child_samples": trial.suggest_int("min_child_samples", 20, 200, log=True),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-2, 10.0, log=True),
+        }
+        briers = []
+        for train_idx, val_idx in splits:
+            model = LGBMClassifier(
+                **params, subsample_freq=1, random_state=0, verbosity=-1
+            )
+            model.fit(X.iloc[train_idx], y.iloc[train_idx])
+            p = _prob_up(model, X.iloc[val_idx])
+            briers.append(brier_score_loss(y.iloc[val_idx].to_numpy(), p))
+        return float(np.mean(briers))
+
+    study = optuna.create_study(
+        direction="minimize", sampler=optuna.samplers.TPESampler(seed=0)
+    )
+    study.optimize(objective, n_trials=n_trials)
+    return dict(study.best_params)
 
 
 def feature_hash() -> str:
@@ -150,6 +222,7 @@ def make_signal(
     stake: float,
     expiry_seconds: int,
     fold: int,
+    model_version: str = MODEL_VERSION,
 ) -> dict:
     """One MIDAS-compatible BinarySignal JSON object (serde field names).
 
@@ -167,7 +240,7 @@ def make_signal(
         "expiry_seconds": expiry_seconds,
         "payout": out_payout,
         "predicted_prob_up": round(float(p_up), 6),
-        "model_version": MODEL_VERSION,
+        "model_version": model_version,
         "feature_hash": feature_hash(),
         "note": f"fold={fold}{tag}",
     }
@@ -182,6 +255,8 @@ def walk_forward(
     stake: float = 1.0,
     expiry_seconds: int = 300,
     horizon: int = 5,
+    model_kind: str = "logreg",
+    tune_trials: int = 0,
 ) -> dict:
     """Run the train-freeze-predict loop. Returns signals + fold metrics.
 
@@ -193,6 +268,7 @@ def walk_forward(
     X = labeled[FEATURE_COLUMNS]
     y = labeled["label_up"]
     gap = horizon if gap is None else gap
+    model_version = MODEL_VERSIONS[model_kind]
     prospective = callable(payout)
     payout_at = payout if prospective else (lambda ts: payout)
 
@@ -202,13 +278,23 @@ def walk_forward(
     payout_missing_total = 0
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(X)):
-        model = ChronoCalibratedModel(n_folds=3, gap=gap)
+        tuned_params = None
+        if tune_trials and model_kind == "lgbm":
+            tuned_params = tune_lgbm(
+                X.iloc[train_idx], y.iloc[train_idx], gap=gap, n_trials=tune_trials
+            )
+        model = ChronoCalibratedModel(
+            n_folds=3, gap=gap, model_kind=model_kind, model_params=tuned_params
+        )
         model.fit(X.iloc[train_idx], y.iloc[train_idx])
         # Model is now frozen; only strictly-later rows are predicted.
         p_up = model.predict_proba_up(X.iloc[test_idx])
 
         fold_signals = [
-            make_signal(ts, p, payout_at(int(ts)), ev_margin, stake, expiry_seconds, fold)
+            make_signal(
+                ts, p, payout_at(int(ts)), ev_margin, stake, expiry_seconds, fold,
+                model_version=model_version,
+            )
             for ts, p in zip(labeled["to_ts"].iloc[test_idx], p_up)
         ]
         signals.extend(fold_signals)
@@ -229,6 +315,7 @@ def walk_forward(
                 "trades": trades,
                 "coverage": trades / len(test_idx),
                 "payout_missing": payout_missing,
+                "tuned_params": tuned_params,
             }
         )
 
@@ -237,7 +324,7 @@ def walk_forward(
         "signals": signals,
         "folds": folds,
         "manifest": {
-            "model_version": MODEL_VERSION,
+            "model_version": model_version,
             "feature_version": FEATURE_VERSION,
             "feature_hash": feature_hash(),
             "feature_columns": FEATURE_COLUMNS,
@@ -252,6 +339,7 @@ def walk_forward(
             "stake": stake,
             "expiry_seconds": expiry_seconds,
             "horizon_bars": horizon,
+            "tune_trials": tune_trials,
             "n_splits": n_splits,
             "gap_bars": gap,
             "labeled_rows": len(labeled),
@@ -332,8 +420,13 @@ def main() -> None:
         "--payout-max-age", type=int, default=7200,
         help="prospective mode: max snapshot age in seconds (older = unavailable)",
     )
+    parser.add_argument("--model", choices=tuple(MODEL_VERSIONS), default="logreg",
+                        help="base model: logreg (calibrated linear) or lgbm (LightGBM)")
+    parser.add_argument("--tune-trials", type=int, default=0,
+                        help="lgbm only: Optuna trials per fold, scored inside the "
+                        "training window (0 = use LGBM_DEFAULTS)")
     parser.add_argument("--campaign", default=None,
-                        help="research-campaign id (default: <asset>-logreg)")
+                        help="research-campaign id (default: <asset>-<model>)")
     parser.add_argument("--splits", type=int, default=5)
     parser.add_argument("--ev-margin", type=float, default=0.02)
     parser.add_argument("--out", default="runs")
@@ -373,8 +466,10 @@ def main() -> None:
         ev_margin=args.ev_margin,
         expiry_seconds=args.horizon * args.interval,
         horizon=args.horizon,
+        model_kind=args.model,
+        tune_trials=args.tune_trials,
     )
-    campaign = args.campaign or f"{args.asset.lower()}-logreg"
+    campaign = args.campaign or f"{args.asset.lower()}-{args.model}"
     result["manifest"]["asset"] = args.asset
     result["manifest"]["campaign"] = campaign
     result["manifest"]["dataset_content_sha256"] = history_report["content_sha256"]

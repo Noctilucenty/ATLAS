@@ -14,15 +14,17 @@ requires a FEATURE_VERSION bump so old model results stay reproducible.
 import numpy as np
 import pandas as pd
 from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator
-from ta.volatility import AverageTrueRange
+from ta.trend import ADXIndicator, EMAIndicator, MACD
+from ta.volatility import AverageTrueRange, BollingerBands
 
-FEATURE_VERSION = "1.1.0"  # 1.1.0: gap-aware - windows and labels never span missing bars
+FEATURE_VERSION = "1.3.0"  # 1.3.0: + adx, bb_pctb, macd_hist_atr, ret_60
 
 EMA_FAST = 8
 EMA_SLOW = 21
 RSI_PERIOD = 14
 ATR_PERIOD = 14
+ADX_PERIOD = 14
+BB_WINDOW = 20
 VOLUME_WINDOW = 20
 REGIME_WINDOW = 480  # trailing bars for the volatility-percentile regime
 SLOPE_LAG = 3
@@ -31,6 +33,10 @@ FEATURE_COLUMNS = [
     "ret_1",
     "ret_5",
     "ret_15",
+    "ret_60",
+    "adx",
+    "bb_pctb",
+    "macd_hist_atr",
     "ema_spread_atr",
     "ema_fast_slope",
     "rsi",
@@ -92,7 +98,12 @@ def split_contiguous(df: pd.DataFrame, interval: int) -> list[pd.DataFrame]:
     ]
 
 
-def build_features(df: pd.DataFrame, interval: int = 60, horizon: int = 5) -> pd.DataFrame:
+def build_features(
+    df: pd.DataFrame,
+    interval: int = 60,
+    horizon: int = 5,
+    entry_next_open: bool = False,
+) -> pd.DataFrame:
     """Compute the curated feature set plus the forward label, gap-aware.
 
     The frame is split into contiguous segments at every missing-bar boundary
@@ -106,7 +117,7 @@ def build_features(df: pd.DataFrame, interval: int = 60, horizon: int = 5) -> pd
     feature_version. Warmup rows with undefined features are dropped."""
     segments = split_contiguous(df, interval)
     parts = [
-        _build_features_segment(segment, interval, horizon)
+        _build_features_segment(segment, interval, horizon, entry_next_open)
         for segment in segments
     ]
     parts = [p for p in parts if not p.empty]
@@ -117,7 +128,14 @@ def build_features(df: pd.DataFrame, interval: int = 60, horizon: int = 5) -> pd
     return pd.concat(parts, ignore_index=True)
 
 
-def _build_features_segment(df: pd.DataFrame, interval: int, horizon: int) -> pd.DataFrame:
+def _build_features_segment(
+    df: pd.DataFrame, interval: int, horizon: int, entry_next_open: bool = False
+) -> pd.DataFrame:
+    # Segments shorter than indicator warmup can't yield any feature row and
+    # crash ta's ATR/ADX outright (ADX needs ~2x its window); they
+    # contribute nothing.
+    if len(df) <= max(ATR_PERIOD, RSI_PERIOD, VOLUME_WINDOW, EMA_SLOW, 2 * ADX_PERIOD):
+        return pd.DataFrame()
     df = df.reset_index(drop=True)
     out = pd.DataFrame({"from_ts": df["from_ts"], "to_ts": df["to_ts"]})
 
@@ -126,6 +144,7 @@ def _build_features_segment(df: pd.DataFrame, interval: int, horizon: int) -> pd
     out["ret_1"] = close.pct_change(1)
     out["ret_5"] = close.pct_change(5)
     out["ret_15"] = close.pct_change(15)
+    out["ret_60"] = close.pct_change(60)
 
     ema_fast = EMAIndicator(close, EMA_FAST).ema_indicator()
     ema_slow = EMAIndicator(close, EMA_SLOW).ema_indicator()
@@ -136,12 +155,27 @@ def _build_features_segment(df: pd.DataFrame, interval: int, horizon: int) -> pd
     out["rsi"] = RSIIndicator(close, RSI_PERIOD).rsi()
     out["atr_norm"] = atr / close
 
+    # Trend strength (regime discriminator: trending vs ranging), scaled to ~[0,1].
+    out["adx"] = ADXIndicator(high, low, close, ADX_PERIOD).adx() / 100.0
+    # Position inside the Bollinger channel (mean-reversion pressure).
+    out["bb_pctb"] = BollingerBands(close, BB_WINDOW).bollinger_pband()
+    # Momentum acceleration, volatility-normalized like ema_spread_atr.
+    out["macd_hist_atr"] = MACD(close).macd_diff() / atr_safe
+
     bar_range = (high - low).replace(0.0, np.nan)
     out["body_ratio"] = ((close - open_).abs() / bar_range).fillna(0.0)
     out["upper_wick_ratio"] = ((high - np.maximum(close, open_)) / bar_range).fillna(0.0)
     out["lower_wick_ratio"] = ((np.minimum(close, open_) - low) / bar_range).fillna(0.0)
 
-    out["vol_rel"] = df["volume"] / df["volume"].rolling(VOLUME_WINDOW).mean()
+    # Some feeds (IQ Option OTC markets) report volume=0 on every bar; a 0/0
+    # vol_rel would NaN out the whole segment, so fall back to a neutral 1.0.
+    # A zero rolling mean on an otherwise real volume feed is also mapped to
+    # NaN (dropped) rather than division-by-zero inf.
+    if df["volume"].gt(0).any():
+        vol_mean = df["volume"].rolling(VOLUME_WINDOW).mean().replace(0.0, np.nan)
+        out["vol_rel"] = df["volume"] / vol_mean
+    else:
+        out["vol_rel"] = 1.0
 
     trend_5 = _mtf_trend(df, interval, 5)
     trend_15 = _mtf_trend(df, interval, 15)
@@ -168,10 +202,14 @@ def _build_features_segment(df: pd.DataFrame, interval: int, horizon: int) -> pd
     )
 
     future_close = close.shift(-horizon)
+    # entry_next_open: realistic-execution label. The signal fires at t's
+    # close but a real order fills at the NEXT bar's open, so the option's
+    # strike is open[t+1], not close[t]. Exercise stays at close[t+horizon].
+    entry = open_.shift(-1) if entry_next_open else close
     out["label_up"] = np.where(
-        future_close.isna() | (future_close == close),
+        future_close.isna() | entry.isna() | (future_close == entry),
         np.nan,
-        (future_close > close).astype(float),
+        (future_close > entry).astype(float),
     )
 
     out["feature_version"] = FEATURE_VERSION

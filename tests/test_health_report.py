@@ -145,14 +145,16 @@ def test_report_flags_missing_required_payout_key(tmp_path):
     assert report["healthy"] is False
 
 def test_warnings_do_not_hide_behind_healthy(tmp_path):
+    from instruments import INSTRUMENTS
+
     now = 1_800_000_000
     conn = open_db(tmp_path / "m.duckdb")
-    # Gap between two stored ranges + stale latest candle (4h old).
+    # Gap between two stored ranges + stale latest candle (4h old); every
+    # registered instrument gets data so only warnings remain.
     store_dataset(conn, "EURUSD", 60, make_candles(60, now - 90000), [])
-    store_dataset(conn, "EURUSD", 60, make_candles(60, now - 18000), [])
-    store_dataset(conn, "EURUSD-OTC", 60, make_candles(60, now - 18000), [])
-    snapshot(conn, now - 15000, "EURUSD-op")
-    snapshot(conn, now - 15000, "EURUSD-OTC")
+    for asset, spec in INSTRUMENTS.items():
+        store_dataset(conn, asset, 60, make_candles(60, now - 18000), [])
+        snapshot(conn, now - 15000, spec.quote_key, kind=spec.option_kind)
     report = build_report(conn, "=== cycle exit status: 0 ===\n", now, current_cycle_status=0)
     assert report["healthy"] is True  # collection itself is fine...
     joined = " | ".join(report["warnings"])
