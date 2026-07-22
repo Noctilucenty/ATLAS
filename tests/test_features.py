@@ -193,3 +193,26 @@ def test_har_features_are_optional_and_causal():
         pd.testing.assert_series_equal(
             merged[f"{col}_t"], merged[f"{col}_f"], check_names=False
         )
+
+
+def test_mtf_context_features_are_optional_and_causal():
+    """extra_mtf adds H1/H4 positional context; row t must not use later rows."""
+    from features import EXTRA_MTF_COLUMNS
+
+    frame = make_frame(wave(900))  # h4 window = 240 bars
+    base = build_features(frame, horizon=5)
+    assert not any(c in base.columns for c in EXTRA_MTF_COLUMNS)
+
+    full = build_features(frame, horizon=5, extra_mtf=True)
+    assert len(full) > 0
+    assert not full[EXTRA_MTF_COLUMNS].isna().any().any()
+    assert full["h1_range_pos"].between(0, 1).all()
+    assert full["h4_range_pos"].between(0, 1).all()
+
+    truncated = build_features(frame.iloc[:700].copy(), horizon=5, extra_mtf=True)
+    merged = truncated.merge(full, on="to_ts", suffixes=("_t", "_f"))
+    assert len(merged) > 0
+    for col in EXTRA_MTF_COLUMNS:
+        pd.testing.assert_series_equal(
+            merged[f"{col}_t"], merged[f"{col}_f"], check_names=False
+        )

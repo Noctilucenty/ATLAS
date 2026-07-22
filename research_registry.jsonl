@@ -10,3 +10,4 @@
 {"ts_utc": "2026-07-22T23:36:15+00:00", "family": "meta-thresholds", "description": "meta-labeling holdout thresholds 0.5/0.55/0.6/0.65", "n_variants": 4, "config_hash": "44136fa355b3", "config": {}, "outcome": "+6pt at 0.60 -> H3"}
 {"ts_utc": "2026-07-22T23:36:15+00:00", "family": "wr-grid", "description": "leak-free (ev x meta) grid on decade selection", "n_variants": 30, "config_hash": "44136fa355b3", "config": {}, "outcome": "0.70 meta -> 71.5% holdout"}
 {"ts_utc": "2026-07-22T23:36:15+00:00", "family": "specialist-vs-global", "description": "per-pair vs pooled base model x 3 thresholds", "n_variants": 6, "config_hash": "44136fa355b3", "config": {}, "outcome": "global wins 3/3"}
+{"ts_utc": "2026-07-22T23:43:57+00:00", "family": "meta-dial-extension", "description": "meta thresholds 0.70-0.80 on pooled global holdout", "n_variants": 5, "config_hash": "44136fa355b3", "config": {}, "outcome": "monotone to 0.775 (80.9%, 392 trades); 0.80 thin (57)"}

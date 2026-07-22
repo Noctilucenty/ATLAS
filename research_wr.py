@@ -33,7 +33,14 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from features import FEATURE_COLUMNS, build_features
+from features import (
+    EXTRA_MTF_COLUMNS,
+    EXTRA_VOL_COLUMNS,
+    FEATURE_COLUMNS,
+    build_features,
+)
+
+ENRICHED_COLUMNS = list(FEATURE_COLUMNS) + EXTRA_VOL_COLUMNS + EXTRA_MTF_COLUMNS
 from research_deephistory import download_years, load_candles
 from train import ChronoCalibratedModel, decide_action
 
@@ -50,12 +57,19 @@ META_CONTEXT = [
 ]
 
 
-def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str) -> dict:
+def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str,
+                 enrich: bool = False) -> dict:
     """Walk-forward predictions + per-fold base-model importances for one pair.
-    Returns everything the aggregate phase needs, nothing model-specific."""
+
+    enrich=True additionally computes the extra_vol + extra_mtf feature
+    blocks (carried in preds for meta-v2 research) and trains a SECOND
+    direction model per fold on the enriched set, dumped as p_up_ext, so
+    consensus gating can be tested offline. The base p_up stays the
+    production feature contract either way."""
     purge_s = horizon * 60
     candles = load_candles(download_years(pair, range(2016, 2026), Path(cache_dir)))
-    ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True)
+    ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True,
+                        extra_vol=enrich, extra_mtf=enrich)
     ff = ff.dropna(subset=["label_up"]).reset_index(drop=True)
     ts = ff["to_ts"].to_numpy()
     edges = np.linspace(ts[0], ts[-1], splits + 2)
@@ -73,6 +87,10 @@ def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str) -> dict:
             importances.append(dict(zip(FEATURE_COLUMNS, base.feature_importances_)))
         sub = ff.iloc[te].copy()
         sub["p_up"] = model.predict_proba_up(ff[FEATURE_COLUMNS].iloc[te])
+        if enrich:
+            ext = ChronoCalibratedModel(n_folds=3, gap=horizon, model_kind="lgbm")
+            ext.fit(ff[ENRICHED_COLUMNS].iloc[tr], ff["label_up"].iloc[tr])
+            sub["p_up_ext"] = ext.predict_proba_up(ff[ENRICHED_COLUMNS].iloc[te])
         sub["asset"] = pair.upper()
         preds.append(sub)
         print(f"  {pair} fold {k}", flush=True)
@@ -241,6 +259,8 @@ def main() -> None:
     ap.add_argument("--compute-pooled", action="store_true",
                     help="global model: train pooled over --pairs, pickle to --dump")
     ap.add_argument("--compute-pair", default=None, help="compute one pair and pickle to --dump")
+    ap.add_argument("--enrich", action="store_true",
+                    help="carry extra_vol+extra_mtf columns and a second enriched direction model (p_up_ext)")
     ap.add_argument("--dump", default=None)
     ap.add_argument("--aggregate", default=None, help="glob of pair pickles to analyse")
     ap.add_argument("--pairs", default="eurusd,gbpusd,usdjpy", help="fallback single-process mode")
@@ -260,7 +280,8 @@ def main() -> None:
         return
 
     if args.compute_pair:
-        bundle = compute_pair(args.compute_pair, args.horizon, args.splits, args.cache_dir)
+        bundle = compute_pair(args.compute_pair, args.horizon, args.splits,
+                              args.cache_dir, enrich=args.enrich)
         with open(args.dump, "wb") as fh:
             pickle.dump(bundle, fh)
         print(f"dumped {args.compute_pair} -> {args.dump}")

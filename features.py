@@ -45,6 +45,17 @@ EXTRA_VOL_COLUMNS = [
     "vol_of_vol",
 ]
 
+# Optional higher-timeframe context (build_features(extra_mtf=True)). Real
+# H1/H4 positional context, unlike mtf_align's crude +-1 sign: where price
+# sits inside the trailing 1h/4h range, and its distance from the 1h/4h EMA.
+# All trailing windows over 1-minute bars - causal by construction.
+EXTRA_MTF_COLUMNS = [
+    "h1_range_pos",
+    "h4_range_pos",
+    "h1_ema_dist",
+    "h4_ema_dist",
+]
+
 # Optional HAR-RV block (build_features(extra_har=True)). The heterogeneous
 # autoregressive model of realized volatility is the standard workhorse for
 # volatility forecasting: realized variance measured over short, medium and
@@ -170,6 +181,30 @@ def _range_vol_features(
     out["vol_of_vol"] = gk_rate.rolling(window).std() / gk_rate.rolling(window).mean()
 
 
+def _mtf_context_features(
+    out: pd.DataFrame,
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    interval: int,
+) -> None:
+    """H1/H4 positional context from trailing 1-minute windows.
+
+    range_pos: where the close sits inside the trailing window's high-low
+    range, in [0, 1] (0.5 when the range is degenerate). ema_dist: relative
+    distance from the trailing-window EMA. min_periods full so warmup rows
+    stay NaN instead of being computed from a handful of bars."""
+    per_hour = max(int(3600 / interval), 1)
+    for tag, bars in (("h1", per_hour), ("h4", per_hour * 4)):
+        hi = high.rolling(bars, min_periods=bars).max()
+        lo = low.rolling(bars, min_periods=bars).min()
+        rng = (hi - lo)
+        pos = (close - lo) / rng.replace(0.0, np.nan)
+        out[f"{tag}_range_pos"] = pos.where(rng > 0, 0.5)
+        ema = close.ewm(span=bars, min_periods=bars).mean()
+        out[f"{tag}_ema_dist"] = (close - ema) / close
+
+
 def _har_features(out: pd.DataFrame, close: pd.Series, interval: int) -> None:
     """HAR-RV realized-variance term structure, causal by construction.
 
@@ -219,6 +254,7 @@ def build_features(
     entry_next_open: bool = False,
     extra_vol: bool = False,
     extra_har: bool = False,
+    extra_mtf: bool = False,
 ) -> pd.DataFrame:
     """Compute the curated feature set plus the forward label, gap-aware.
 
@@ -234,14 +270,17 @@ def build_features(
     segments = split_contiguous(df, interval)
     parts = [
         _build_features_segment(
-            segment, interval, horizon, entry_next_open, extra_vol, extra_har
+            segment, interval, horizon, entry_next_open, extra_vol, extra_har,
+            extra_mtf,
         )
         for segment in segments
     ]
     parts = [p for p in parts if not p.empty]
     if not parts:
-        extra = (EXTRA_VOL_COLUMNS if extra_vol else []) + (
-            EXTRA_HAR_COLUMNS if extra_har else []
+        extra = (
+            (EXTRA_VOL_COLUMNS if extra_vol else [])
+            + (EXTRA_HAR_COLUMNS if extra_har else [])
+            + (EXTRA_MTF_COLUMNS if extra_mtf else [])
         )
         return pd.DataFrame(
             columns=[
@@ -259,6 +298,7 @@ def _build_features_segment(
     entry_next_open: bool = False,
     extra_vol: bool = False,
     extra_har: bool = False,
+    extra_mtf: bool = False,
 ) -> pd.DataFrame:
     # Segments shorter than indicator warmup can't yield any feature row and
     # crash ta's ATR/ADX outright (ADX needs ~2x its window); they
@@ -349,4 +389,7 @@ def _build_features_segment(
     if extra_har:
         _har_features(out, close, interval)
         required += EXTRA_HAR_COLUMNS
+    if extra_mtf:
+        _mtf_context_features(out, high, low, close, interval)
+        required += EXTRA_MTF_COLUMNS
     return out.dropna(subset=required).reset_index(drop=True)
