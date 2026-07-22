@@ -26,7 +26,17 @@ def stage_sandbox(tmp_path: Path) -> Path:
     shutil.copy(SCRIPT, script)
     stub = tmp_path / ".venv" / "bin" / "python"
     stub.parent.mkdir(parents=True)
-    stub.write_text('#!/bin/zsh\necho "STUB python $@"\nexit ${STUB_EXIT:-0}\n')
+    # The stub must emulate python well enough for the script's real usage:
+    # collect_cycle.sh derives its asset list by importing the registry.
+    stub.write_text(
+        "#!/bin/zsh\n"
+        'if [[ "$*" == *"from instruments import"* ]]; then\n'
+        '  echo "EURUSD EURUSD-OTC"\n'
+        "  exit 0\n"
+        "fi\n"
+        'echo "STUB python $@"\n'
+        "exit ${STUB_EXIT:-0}\n"
+    )
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
     return script
 
