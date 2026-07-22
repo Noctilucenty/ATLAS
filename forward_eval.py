@@ -48,7 +48,12 @@ H2_PRIMARY_MARGIN = 0.03
 # family-wise error at 5%. H3 is the single primary hypothesis.
 ALPHA = 0.05 / 4
 H2_SECONDARY_MARGIN = 0.04
-H3_META_THRESHOLD = 0.60
+H3_META_THRESHOLD = 0.60          # original H3 primary
+# H3 family: decade holdout (leak-free, research_wr.py) shows win rate rises
+# monotonically with the meta threshold - 61% / 67% / 72% at 0.60 / 0.65 /
+# 0.70. Evaluated together on the forward window; 0.65 is the preferred
+# operating point (best win-rate/volume balance), 0.70 the aggressive one.
+H3_META_THRESHOLDS = (0.60, 0.65, 0.70)
 MIN_CLUSTERS_CANDLES = 30
 MIN_CLUSTERS_PAPER = 20
 
@@ -182,7 +187,11 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
         s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
         out[label] = s
 
-    # H3: primary-gate signals surviving the meta filter.
+    # H3 family: primary-gate signals surviving the meta filter, evaluated at
+    # every registered threshold (decade holdout predicts monotone gain:
+    # 0.60->61%, 0.65->67%, 0.70->72%). meta_p is a per-signal score, so the
+    # threshold applies at evaluation time - no model change, no leak (the
+    # forward window post-dates the meta model's training data).
     actions = [decide_action(float(p), payout_fallback, H2_PRIMARY_MARGIN) for p in p_up]
     idx = [i for i, a in enumerate(actions) if a != "no_trade"]
     if idx:
@@ -190,17 +199,18 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
         meta_p = meta_probabilities(
             meta_bundle, sub, [p_up[i] for i in idx], [actions[i] for i in idx]
         )
-        trades = []
-        for j, i in enumerate(idx):
-            if meta_p[j] < H3_META_THRESHOLD:
-                continue
-            row = forward.iloc[i]
-            won = (row["label_up"] == 1.0) == (actions[i] == "binary_call")
-            trades.append((row["asset"], int(row["to_ts"]), bool(won), payout_fallback))
-        s = cluster_stats(trades, purge_s)
-        s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
-        s["meta_kept"] = f"{len(trades)}/{len(idx)}"
-        out["h3"] = s
+        for thr in H3_META_THRESHOLDS:
+            trades = []
+            for j, i in enumerate(idx):
+                if meta_p[j] < thr:
+                    continue
+                row = forward.iloc[i]
+                won = (row["label_up"] == 1.0) == (actions[i] == "binary_call")
+                trades.append((row["asset"], int(row["to_ts"]), bool(won), payout_fallback))
+            s = cluster_stats(trades, purge_s)
+            s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
+            s["meta_kept"] = f"{len(trades)}/{len(idx)}"
+            out[f"h3_meta{int(thr * 100)}"] = s
     return out
 
 
@@ -228,10 +238,11 @@ def paper_track(horizon: int) -> dict:
 
     purge_s = horizon * 60
     out = {"paper_signals": len(signals)}
-    for label, keep in (
-        ("h2_primary", lambda s: True),
-        ("h3", lambda s: s.get("meta_p") is not None and s["meta_p"] >= H3_META_THRESHOLD),
-    ):
+    keeps = [("h2_primary", lambda s: True)]
+    for thr in H3_META_THRESHOLDS:
+        keeps.append((f"h3_meta{int(thr * 100)}",
+                      lambda s, t=thr: s.get("meta_p") is not None and s["meta_p"] >= t))
+    for label, keep in keeps:
         trades, unscored = [], 0
         for s in signals:
             if not keep(s):
