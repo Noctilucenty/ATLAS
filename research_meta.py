@@ -79,6 +79,9 @@ def main() -> None:
     parser.add_argument("--payout", type=float, default=0.87)
     parser.add_argument("--margin", type=float, default=0.02)
     parser.add_argument("--cache-dir", default="histdata_cache")
+    parser.add_argument("--save-model", default=None,
+                        help="after holdout reporting, refit the meta model on ALL "
+                        "trades and pickle {model, features, meta} to this path")
     args = parser.parse_args()
 
     frames = []
@@ -148,6 +151,25 @@ def main() -> None:
     print(json.dumps(report, indent=2))
     imp = sorted(zip(feat, meta.feature_importances_), key=lambda t: -t[1])[:8]
     print("top meta features:", [f"{n}:{int(v)}" for n, v in imp])
+
+    if args.save_model:
+        import pickle
+
+        final = LGBMClassifier(**meta.get_params())
+        final.fit(trades[feat], trades["won"])
+        payload = {
+            "model": final,
+            "features": feat,
+            "meta": {
+                "trained_on": "histdata 2016-2025 gated trades",
+                "n_trades": len(trades),
+                "holdout_report": report,
+                "pairs": sorted(trades["pair"].unique().tolist()),
+            },
+        }
+        with open(args.save_model, "wb") as fh:
+            pickle.dump(payload, fh)
+        print("saved meta model:", args.save_model)
 
 
 if __name__ == "__main__":

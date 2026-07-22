@@ -71,6 +71,30 @@ gate ev_margin=0.04 - the decade anchors show the staircase is monotone, so
 0.04 should trade ~30% less at ~1-2 points higher win rate. Reported
 alongside the primary, never substituted for it after the fact.
 
+## Hypothesis #3 (registered 2026-07-22, before any forward data existed)
+
+H2's signals filtered by a META-LABELING model (research_meta.py): an LGBM
+trained on 42,619 decade gated trades (2016-2022, EURUSD/GBPUSD/USDJPY
+histdata) to predict whether a gated trade wins, from trade context (hour,
+volatility, trend strength, model confidence). Honest holdout (2023-2025,
+13,237 trades, base 55.9%):
+
+| meta threshold | kept | win rate | lift |
+|---|---|---|---|
+| 0.55 | 66% | 57.4% | +1.5 (p=0.005) |
+| 0.60 | 25% | 61.9% | +6.0 (p~0) |
+| 0.65 | 10% | 68.2% | +12.4 (p~0) |
+
+Independently replicated gating fact: late-UTC session (21-24h) wins 60.7%
+on holdout vs ~54% for all other sessions. ADX tables did NOT replicate
+between periods and are not used.
+
+Pre-committed forward evaluation for #3: H2 primary-gate signals with
+meta_p >= 0.60 (deployed model models/meta-h3.pkl, refit on all 55,856
+decade trades; threshold fixed NOW). Success criterion as #2. Caveat noted
+in advance: the meta model is spot-trained; its transfer to OTC instruments
+is untested and the forward test will answer it.
+
 ## Deep-history anchor (2026-07-22, research_deephistory.py)
 
 Same feature family (v1.3.0), model, horizon and REALISTIC labels on ten

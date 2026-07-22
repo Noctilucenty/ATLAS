@@ -78,6 +78,34 @@ def load_frozen_model():
     return paths[-1].name, bundle["model"], bundle["meta"]
 
 
+def load_meta_filter():
+    """Optional hypothesis-#3 meta model. Signals are NEVER gated by it here;
+    its probability is logged per signal so H3 can be evaluated later."""
+    path = PROJECT_DIR / "models" / "meta-h3.pkl"
+    if not path.exists():
+        return None
+    with open(path, "rb") as fh:
+        return pickle.load(fh)
+
+
+def meta_probability(meta_bundle, row, p: float, action: str) -> float | None:
+    if meta_bundle is None:
+        return None
+    feats = {
+        "p_up": p, "conf": abs(p - 0.5),
+        "is_call": float(action == "binary_call"),
+    }
+    for col in meta_bundle["features"]:
+        if col in feats:
+            continue
+        if col.startswith("pair_"):
+            feats[col] = float(col == f"pair_{row['asset'].replace('-OTC', '')}")
+        else:
+            feats[col] = float(row[col]) if col in row.index else 0.0
+    frame = pd.DataFrame([feats])[meta_bundle["features"]]
+    return float(meta_bundle["model"].predict_proba(frame)[0, 1])
+
+
 def normalize(raw: list) -> pd.DataFrame:
     rows = [
         {
@@ -155,6 +183,7 @@ def main() -> int:
     from iqoptionapi.stable_api import IQ_Option
 
     model_name, model, meta = load_frozen_model()
+    meta_bundle = load_meta_filter()
     horizon = meta["horizon_bars"]
     feature_cols = meta["feature_columns"]
     print(f"model={model_name} rows={meta['rows']} data_end={meta['data_end_ts']}", flush=True)
@@ -193,12 +222,14 @@ def main() -> int:
                 action = decide_action(float(p), float(payout), EV_MARGIN)
                 if action == "no_trade":
                     continue
+                meta_p = meta_probability(meta_bundle, row, float(p), action)
                 record = {
                     "ts": cycle_ts,
                     "bar_to_ts": int(row["to_ts"]),
                     "asset": asset,
                     "action": action,
                     "p_up": round(float(p), 6),
+                    "meta_p": round(meta_p, 4) if meta_p is not None else None,
                     "payout": float(payout),
                     "ev_margin": EV_MARGIN,
                     "model": model_name,
