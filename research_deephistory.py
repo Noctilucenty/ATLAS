@@ -21,7 +21,7 @@ import pandas as pd
 from scipy import stats
 from sklearn.metrics import brier_score_loss
 
-from features import EXTRA_VOL_COLUMNS, FEATURE_COLUMNS, build_features
+from features import EXTRA_HAR_COLUMNS, EXTRA_VOL_COLUMNS, FEATURE_COLUMNS, build_features
 from research_pooled import evaluate_margin
 from train import ChronoCalibratedModel
 
@@ -96,6 +96,8 @@ def main() -> None:
                         help="base model; ensemble = multi-seed LGBM + logreg")
     parser.add_argument("--extra-vol", action="store_true",
                         help="add range-based volatility + Corwin-Schultz spread features")
+    parser.add_argument("--extra-har", action="store_true",
+                        help="add the HAR-RV realized-volatility term structure")
     parser.add_argument("--cache-dir", default="histdata_cache")
     parser.add_argument("--dump-preds", default=None,
                         help="write all (pair, ts, p_up, label) test predictions to this JSON path")
@@ -113,11 +115,16 @@ def main() -> None:
     ff = build_features(
         candles, interval=60, horizon=args.horizon,
         entry_next_open=args.entry_next_open, extra_vol=args.extra_vol,
+        extra_har=args.extra_har,
     ).dropna(subset=["label_up"]).reset_index(drop=True)
     print(f"labeled rows={len(ff)}", flush=True)
 
     purge_s = args.horizon * 60
-    feature_cols = list(FEATURE_COLUMNS) + (EXTRA_VOL_COLUMNS if args.extra_vol else [])
+    feature_cols = (
+        list(FEATURE_COLUMNS)
+        + (EXTRA_VOL_COLUMNS if args.extra_vol else [])
+        + (EXTRA_HAR_COLUMNS if args.extra_har else [])
+    )
     X, y = ff[feature_cols], ff["label_up"]
     ts = ff["to_ts"].to_numpy()
     edges = np.linspace(ts[0], ts[-1], args.splits + 2)

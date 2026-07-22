@@ -45,6 +45,21 @@ EXTRA_VOL_COLUMNS = [
     "vol_of_vol",
 ]
 
+# Optional HAR-RV block (build_features(extra_har=True)). The heterogeneous
+# autoregressive model of realized volatility is the standard workhorse for
+# volatility forecasting: realized variance measured over short, medium and
+# long windows, because traders operating at different horizons produce a
+# term structure. The ratios matter more than the levels here - they say
+# whether volatility is currently elevated or suppressed relative to its own
+# recent history, which is a regime signal rather than a scale.
+EXTRA_HAR_COLUMNS = [
+    "rv_1h",
+    "rv_4h",
+    "rv_1d",
+    "rv_ratio_short",
+    "rv_ratio_long",
+]
+
 FEATURE_COLUMNS = [
     "ret_1",
     "ret_5",
@@ -151,6 +166,34 @@ def _range_vol_features(
     out["vol_of_vol"] = gk_rate.rolling(window).std() / gk_rate.rolling(window).mean()
 
 
+def _har_features(out: pd.DataFrame, close: pd.Series, interval: int) -> None:
+    """HAR-RV realized-variance term structure, causal by construction.
+
+    Realized variance is the trailing sum of squared log returns, reported as
+    an annualisation-free rate (sqrt of mean squared return) so the three
+    horizons are directly comparable. Windows are expressed in bars so a
+    non-60s interval still means one hour / four hours / one day."""
+    per_hour = max(int(3600 / interval), 1)
+    log_ret = np.log(close / close.shift(1))
+    sq = log_ret**2
+
+    def _rv(bars: int) -> pd.Series:
+        # min_periods=bars keeps warmup rows NaN rather than quietly
+        # computing a rate from a handful of observations.
+        return np.sqrt(sq.rolling(bars, min_periods=bars).mean())
+
+    rv_1h = _rv(per_hour)
+    rv_4h = _rv(per_hour * 4)
+    rv_1d = _rv(per_hour * 24)
+    out["rv_1h"] = rv_1h
+    out["rv_4h"] = rv_4h
+    out["rv_1d"] = rv_1d
+    # Term-structure ratios: >1 means short-horizon volatility is running hot
+    # relative to the longer window.
+    out["rv_ratio_short"] = rv_1h / rv_4h.replace(0.0, np.nan)
+    out["rv_ratio_long"] = rv_4h / rv_1d.replace(0.0, np.nan)
+
+
 def split_contiguous(df: pd.DataFrame, interval: int) -> list[pd.DataFrame]:
     """Split a candle frame into maximal contiguous segments at gap boundaries."""
     df = df.reset_index(drop=True)
@@ -171,6 +214,7 @@ def build_features(
     horizon: int = 5,
     entry_next_open: bool = False,
     extra_vol: bool = False,
+    extra_har: bool = False,
 ) -> pd.DataFrame:
     """Compute the curated feature set plus the forward label, gap-aware.
 
@@ -185,12 +229,16 @@ def build_features(
     feature_version. Warmup rows with undefined features are dropped."""
     segments = split_contiguous(df, interval)
     parts = [
-        _build_features_segment(segment, interval, horizon, entry_next_open, extra_vol)
+        _build_features_segment(
+            segment, interval, horizon, entry_next_open, extra_vol, extra_har
+        )
         for segment in segments
     ]
     parts = [p for p in parts if not p.empty]
     if not parts:
-        extra = EXTRA_VOL_COLUMNS if extra_vol else []
+        extra = (EXTRA_VOL_COLUMNS if extra_vol else []) + (
+            EXTRA_HAR_COLUMNS if extra_har else []
+        )
         return pd.DataFrame(
             columns=[
                 "from_ts", "to_ts", *FEATURE_COLUMNS, *extra,
@@ -206,6 +254,7 @@ def _build_features_segment(
     horizon: int,
     entry_next_open: bool = False,
     extra_vol: bool = False,
+    extra_har: bool = False,
 ) -> pd.DataFrame:
     # Segments shorter than indicator warmup can't yield any feature row and
     # crash ta's ATR/ADX outright (ADX needs ~2x its window); they
@@ -293,4 +342,7 @@ def _build_features_segment(
     if extra_vol:
         _range_vol_features(out, open_, high, low, close)
         required += EXTRA_VOL_COLUMNS
+    if extra_har:
+        _har_features(out, close, interval)
+        required += EXTRA_HAR_COLUMNS
     return out.dropna(subset=required).reset_index(drop=True)

@@ -169,3 +169,27 @@ def test_extra_vol_features_are_optional_and_causal():
         pd.testing.assert_series_equal(
             merged[f"{col}_t"], merged[f"{col}_f"], check_names=False
         )
+
+
+def test_har_features_are_optional_and_causal():
+    """extra_har adds the realized-volatility term structure without touching
+    the default contract, and row t must not use rows after t."""
+    from features import EXTRA_HAR_COLUMNS
+
+    # A day of RV needs 1440 bars, so the fixture must exceed that.
+    frame = make_frame(wave(2000))
+    base = build_features(frame, horizon=5)
+    assert not any(c in base.columns for c in EXTRA_HAR_COLUMNS)
+
+    full = build_features(frame, horizon=5, extra_har=True)
+    assert len(full) > 0, "1d RV window should still leave usable rows"
+    assert not full[EXTRA_HAR_COLUMNS].isna().any().any()
+    assert (full[["rv_1h", "rv_4h", "rv_1d"]] >= 0).all().all()
+
+    truncated = build_features(frame.iloc[:1800].copy(), horizon=5, extra_har=True)
+    merged = truncated.merge(full, on="to_ts", suffixes=("_t", "_f"))
+    assert len(merged) > 0
+    for col in EXTRA_HAR_COLUMNS:
+        pd.testing.assert_series_equal(
+            merged[f"{col}_t"], merged[f"{col}_f"], check_names=False
+        )
