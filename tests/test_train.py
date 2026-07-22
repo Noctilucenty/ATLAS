@@ -109,3 +109,37 @@ def test_lgbm_tuned_walk_forward_runs():
     assert result["manifest"]["tune_trials"] == 2
     for fold in result["folds"]:
         assert fold["tuned_params"] is None or "learning_rate" in fold["tuned_params"]
+
+
+def test_ensemble_averages_member_probabilities():
+    """The averager must expose a single-estimator surface and return the
+    mean of its members' up-probabilities in classes_ order."""
+    import numpy as np
+
+    from train import ProbabilityAverager, _base_pipeline
+
+    class Stub:
+        def __init__(self, p):
+            self.p = p
+            self.classes_ = np.array([0.0, 1.0])
+
+        def fit(self, X, y):
+            return self
+
+        def predict_proba(self, X):
+            return np.column_stack([np.full(len(X), 1 - self.p), np.full(len(X), self.p)])
+
+    avg = ProbabilityAverager([Stub(0.2), Stub(0.8)])
+    avg.classes_ = np.array([0.0, 1.0])
+    proba = avg.predict_proba(np.zeros((3, 2)))
+    assert np.allclose(proba[:, 1], 0.5)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+
+    assert isinstance(_base_pipeline("ensemble"), ProbabilityAverager)
+
+
+def test_ensemble_walk_forward_runs():
+    result = walk_forward(
+        synthetic_features(), payout=0.85, n_splits=2, model_kind="ensemble"
+    )
+    assert result["manifest"]["model_version"].startswith("ensemble-")

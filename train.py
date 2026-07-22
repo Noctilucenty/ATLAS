@@ -36,6 +36,7 @@ from features import FEATURE_COLUMNS, FEATURE_VERSION, build_features
 MODEL_VERSIONS = {
     "logreg": "logreg-1.1.0",  # 1.1.0: chronological purged calibration
     "lgbm": "lgbm-1.0.0",
+    "ensemble": "ensemble-1.0.0",  # multi-seed LGBM + logreg, probability average
 }
 MODEL_VERSION = MODEL_VERSIONS["logreg"]  # default model
 
@@ -54,7 +55,46 @@ LGBM_DEFAULTS = {
 }
 
 
+class ProbabilityAverager:
+    """Average the up-probabilities of several base estimators.
+
+    Decorrelated errors average out, so a blend of differently-seeded trees
+    plus a linear model is usually better calibrated than any single member.
+    Exposes just enough of the sklearn surface (classes_, fit,
+    predict_proba) for ChronoCalibratedModel and _prob_up to treat it as one
+    estimator."""
+
+    def __init__(self, members: list):
+        self.members = members
+
+    def fit(self, X, y):
+        for m in self.members:
+            m.fit(X, y)
+        self.classes_ = self.members[0].classes_
+        return self
+
+    def predict_proba(self, X) -> np.ndarray:
+        up = np.mean([_prob_up(m, X) for m in self.members], axis=0)
+        # Column order must match self.classes_ so _prob_up indexes correctly.
+        cols = [1.0 - up if c != 1.0 else up for c in self.classes_]
+        return np.column_stack(cols)
+
+
 def _base_pipeline(model_kind: str = "logreg", model_params: dict | None = None):
+    if model_kind == "ensemble":
+        from lightgbm import LGBMClassifier
+
+        params = {**LGBM_DEFAULTS, **(model_params or {})}
+        members = [
+            LGBMClassifier(**params, random_state=seed, verbosity=-1)
+            for seed in (0, 1, 2)
+        ]
+        members.append(
+            make_pipeline(
+                StandardScaler(), LogisticRegression(C=0.1, max_iter=1000, random_state=0)
+            )
+        )
+        return ProbabilityAverager(members)
     if model_kind == "lgbm":
         from lightgbm import LGBMClassifier
 

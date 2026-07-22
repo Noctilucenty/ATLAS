@@ -91,6 +91,9 @@ def main() -> None:
     parser.add_argument("--payout", type=float, default=0.87)
     parser.add_argument("--ev-margins", default="0.02,0.03,0.04")
     parser.add_argument("--entry-next-open", action="store_true")
+    parser.add_argument("--model", default="lgbm",
+                        choices=("lgbm", "logreg", "ensemble"),
+                        help="base model; ensemble = multi-seed LGBM + logreg")
     parser.add_argument("--extra-vol", action="store_true",
                         help="add range-based volatility + Corwin-Schultz spread features")
     parser.add_argument("--cache-dir", default="histdata_cache")
@@ -124,7 +127,9 @@ def main() -> None:
         tr = np.where(ts <= edges[k] - purge_s)[0]
         if not len(te) or len(tr) < 10000:
             continue
-        model = ChronoCalibratedModel(n_folds=3, gap=args.horizon, model_kind="lgbm")
+        model = ChronoCalibratedModel(
+            n_folds=3, gap=args.horizon, model_kind=args.model
+        )
         model.fit(X.iloc[tr], y.iloc[tr])
         p_up = model.predict_proba_up(X.iloc[te])
         brier = float(brier_score_loss(y.iloc[te].to_numpy(), p_up))
