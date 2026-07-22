@@ -184,6 +184,30 @@ three are secondary and reported for information. A secondary passing
 while H3 fails is NOT a green light to trade - it is a new hypothesis
 requiring its own fresh forward window.
 
+## Acceptance framework (added 2026-07-22; does not alter any frozen hypothesis)
+
+An offline acceptance contract (acceptance_report.py) now gates any future
+candidate: leak-free holdout edge at the Bonferroni alpha, PBO < 0.40
+(CSCV), deflated win rate penalised for the HONEST experiment count
+(research_registry.jsonl - 98 variants attempted as of registration),
+Brier < 0.25, meta ECE < 0.05, >= 200 independent holdout trades, and a
+paper check that ONLY the pre-registered forward test can set.
+
+Global-model candidate (ev 0.03, meta 0.65) status: PROVISIONAL PASS -
+69.5% on 1,981 independent holdout trades, PBO 0.00 over 70 combinations,
+deflated z 11.8 after the 98-trial penalty, meta ECE 0.023 (the meta model
+runs ~2-3pt overconfident on USDJPY - noted, within gate). Paper: PENDING.
+
+MinTRL at the Bonferroni alpha sizes the forward window: 163 independent
+trades suffice if the true win rate is 62%, 72 if 66%, 39 if 70%.
+
+Shadow tracks (Farxida-style, same timestamps/prices/payouts, all frozen):
+the live log's p_up/meta_p fields already encode the no-meta track (H2
+primary), every meta-threshold track, and the INVERTED track (flip each
+action at scoring time); the runner additionally logs h4_p (extra-vol
+shadow) and decision_latency_s per signal. The no-model baseline is
+break-even by construction. None of these gates or trades anything.
+
 ## Notes
 
 - Real execution frictions (spread at entry, expiry timing, requotes) are

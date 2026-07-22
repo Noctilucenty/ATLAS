@@ -78,6 +78,19 @@ def load_frozen_model():
     return paths[-1].name, bundle["model"], bundle["meta"]
 
 
+def load_shadow_h4():
+    """Optional H4 (extra-vol) SHADOW model. Never gates or trades - its
+    probability is logged per signal so the shadow track can be scored later
+    on identical timestamps/prices/payouts (Farxida-style parallel tracks).
+    The inverted / no-meta / threshold tracks need no extra logging: they are
+    derivable from p_up and meta_p already in the log."""
+    paths = sorted((PROJECT_DIR / "models").glob("h4-*.pkl"))
+    if not paths:
+        return None
+    with open(paths[-1], "rb") as fh:
+        return pickle.load(fh)
+
+
 def load_meta_filter():
     """Optional hypothesis-#3 meta model. Signals are NEVER gated by it here;
     its probability is logged per signal so H3 can be evaluated later."""
@@ -130,7 +143,7 @@ def latest_feature_rows(client, horizon: int) -> pd.DataFrame:
             candles = normalize(raw)
             # The newest bar may still be forming; keep only closed bars.
             candles = candles[candles["to_ts"] <= now + 1]
-            ff = build_features(candles, interval=60, horizon=horizon)
+            ff = build_features(candles, interval=60, horizon=horizon, extra_vol=True)
             if ff.empty:
                 continue
             row = ff.iloc[[-1]].copy()
@@ -184,6 +197,7 @@ def main() -> int:
 
     model_name, model, meta = load_frozen_model()
     meta_bundle = load_meta_filter()
+    h4_bundle = load_shadow_h4()
     horizon = meta["horizon_bars"]
     feature_cols = meta["feature_columns"]
     print(f"model={model_name} rows={meta['rows']} data_end={meta['data_end_ts']}", flush=True)
@@ -224,6 +238,15 @@ def main() -> int:
                 if action == "no_trade":
                     continue
                 meta_p = meta_probability(meta_bundle, row, float(p), action)
+                h4_p = None
+                if h4_bundle is not None:
+                    try:
+                        cols = h4_bundle["meta"]["feature_columns"]
+                        h4_p = float(h4_bundle["model"].predict_proba_up(
+                            frame.loc[[row.name], cols]
+                        )[0])
+                    except Exception:
+                        pass  # shadow track must never break the primary
                 record = {
                     "ts": cycle_ts,
                     "bar_to_ts": int(row["to_ts"]),
@@ -235,6 +258,9 @@ def main() -> int:
                     "ev_margin": EV_MARGIN,
                     "model": model_name,
                     "mode": "trade" if args.trade else "paper",
+                    # shadow + execution attribution
+                    "h4_p": round(h4_p, 6) if h4_p is not None else None,
+                    "decision_latency_s": cycle_ts - int(row["to_ts"]),
                 }
                 if args.trade:
                     ok, order_id = _call(
