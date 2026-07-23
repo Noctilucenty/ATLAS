@@ -169,6 +169,26 @@ Tested against it and REJECTED (all leak-free, same bundles):
   improving selection at matched volume; useful for stake sizing someday,
   not for win rate.
 
+## Era holdout 2003-2015 (pre-registered 2026-07-23, run once)
+
+The only data our 138 experiments never touched: thirteen years downloaded
+AFTER the expectation was registered. Frozen recipe, era-internal
+walk-forward, meta trained <= 2010, scored once on 2011-2015 at thresholds
+fixed from the modern work.
+
+Verdict per the pre-committed criteria: REPRODUCED - monotone and above
+break-even at all three thresholds (56.7% / 57.1% / 57.1% on 14,468 /
+9,375 / 3,204 independent trades; worst p = 2e-5).
+
+THE HONEST READING, recorded prominently: the magnitude is far smaller
+than on 2016-2025 (67-79%). The staircase rises 0.4pt across thresholds in
+that era versus 12pt on modern data - the edge EXISTS everywhere tested,
+but the strong modern win rates are partly era-specific and/or inflated by
+research-process contamination of 2016-2025 despite the selection/holdout
+discipline. The era result is the LEAST-contaminated estimate we own.
+Forward expectations should be anchored nearer 57-65% than 79%. At 0.87
+payout, 57% is still +6.6% EV per trade - profitable, not spectacular.
+
 ## Rejected levers (2026-07-22) - recorded so they are not re-tried
 
 Both tested on decade EURUSD, identical machinery and row counts.
