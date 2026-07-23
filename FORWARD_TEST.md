@@ -191,6 +191,11 @@ payout, 57% is still +6.6% EV per trade - profitable, not spectacular.
 
 ## Rejected levers (2026-07-22) - recorded so they are not re-tried
 
+DAY-OF-WEEK (2026-07-24): dow_sin/cos added to the direction model, decade
+EURUSD like-for-like: -0.4/+1.6/-0.7/+0.6pt across meta thresholds -
+alternating sign, pure noise. Hour-of-day plus the meta context already
+absorb calendar structure. REJECTED.
+
 Both tested on decade EURUSD, identical machinery and row counts.
 
 ENSEMBLE (3-seed LGBM + logreg averaging): independent win rate 56.6 / 57.3
