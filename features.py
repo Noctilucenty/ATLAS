@@ -209,7 +209,9 @@ def _mtf_context_features(
         lo = low.rolling(bars, min_periods=bars).min()
         rng = (hi - lo)
         pos = (close - lo) / rng.replace(0.0, np.nan)
-        out[f"{tag}_range_pos"] = pos.where(rng > 0, 0.5)
+        # Degenerate zero range mid-series -> neutral 0.5; warmup rows
+        # (rng NaN) stay NaN as documented, instead of fabricating 0.5.
+        out[f"{tag}_range_pos"] = pos.mask(rng == 0, 0.5)
         ema = close.ewm(span=bars, min_periods=bars).mean()
         out[f"{tag}_ema_dist"] = (close - ema) / close
 

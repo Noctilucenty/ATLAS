@@ -73,10 +73,22 @@ def test_no_lookahead_in_features():
 
 
 def test_labels_look_forward_correctly():
-    closes = [1.0] * 100 + [1.0 + 0.001 * i for i in range(1, 51)]  # flat then rising
+    """Non-vacuous label-direction guard (the old fixture produced ZERO
+    rows after warmup, so an inverted label would still have passed)."""
+    n_warm = 700
+    closes = ([1.10 + 0.0002 * np.sin(i / 9) for i in range(n_warm)]
+              + [1.10 + 0.002 * i for i in range(1, 81)])       # then rising
     out = build_features(make_frame(closes), horizon=5)
-    rising = out[out["from_ts"] >= START + 100 * 60]
+    rising = out[out["from_ts"] >= START + (n_warm + 5) * 60]
+    assert len(rising) > 30, "fixture must survive warmup - vacuous otherwise"
     assert (rising["label_up"].dropna() == 1.0).all()
+
+    falling = ([1.10 + 0.0002 * np.sin(i / 9) for i in range(n_warm)]
+               + [1.10 - 0.002 * i for i in range(1, 81)])
+    out2 = build_features(make_frame(falling), horizon=5)
+    drop = out2[out2["from_ts"] >= START + (n_warm + 5) * 60]
+    assert len(drop) > 30
+    assert (drop["label_up"].dropna() == 0.0).all()
 
 
 def test_tie_label_is_nan_and_end_rows_unlabeled():
@@ -85,9 +97,13 @@ def test_tie_label_is_nan_and_end_rows_unlabeled():
     out = build_features(frame, horizon=5)
     # Last horizon rows have no future close -> NaN label.
     assert out["label_up"].tail(5).isna().all()
-    # A perfectly flat stretch produces tie labels -> NaN.
-    flat = build_features(make_frame([1.1] * 700), horizon=5)
-    assert flat["label_up"].isna().all()
+    # A perfectly flat stretch produces tie labels -> NaN. The old
+    # all-flat fixture yielded ZERO rows (RSI/bb 0/0), asserting nothing.
+    closes = [1.10 + 0.0004 * np.sin(i / 7) for i in range(700)] + [1.2] * 40
+    out2 = build_features(make_frame(closes), horizon=5)
+    tie_zone = out2[out2["from_ts"] >= START + (700 + 5) * 60]
+    assert len(tie_zone) > 10, "tie fixture must survive warmup"
+    assert tie_zone["label_up"].isna().all()
 
 
 def test_sessions_are_mutually_exclusive_within_covered_hours():

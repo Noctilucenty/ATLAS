@@ -53,11 +53,15 @@ H3_META_THRESHOLD = 0.60          # original H3 primary
 # monotonically with the meta threshold - 61% / 67% / 72% at 0.60 / 0.65 /
 # 0.70. Evaluated together on the forward window; 0.65 is the preferred
 # operating point (best win-rate/volume balance), 0.70 the aggressive one.
-# 0.775 added 2026-07-22 as an EXPLORATORY reported metric only (decade
-# holdout: 80.9% on 392 trades, all acceptance checks pass; MinTRL ~13
-# trades at that win rate). It is NOT a pass/fail hypothesis - the primary
-# remains H3 @ 0.65 and the alpha accounting is unchanged.
+# Audit correction 2026-07-24 (pre-verdict): PASS/FAIL verdicts are issued
+# ONLY for the four registered hypotheses the ALPHA divides over - H2
+# primary (ev 0.03), H2 secondary (ev 0.04), H3 (meta 0.60 - the ORIGINAL
+# registration; the later "0.65 primary" note was a registration drift and
+# is resolved in favour of what was registered first), and H4 (extra-vol
+# model, ev 0.03). All other thresholds (0.65/0.70/0.775, and ev 0.02) are
+# REPORTED without verdicts. Family-wise error stays at the claimed 5%.
 H3_META_THRESHOLDS = (0.60, 0.65, 0.70, 0.775)
+REGISTERED_VERDICT_KEYS = {"h2_primary", "h2_secondary", "h3_meta60", "h4"}
 MIN_CLUSTERS_CANDLES = 30
 MIN_CLUSTERS_PAPER = 20
 
@@ -90,9 +94,18 @@ def cluster_stats(trades: list[tuple[str, int, bool, float]], purge_s: int) -> d
     breakeven = 1.0 / (1.0 + payout)
     # One-sided: we only care about beating break-even, never about
     # significantly losing.
-    if len(fracs) > 2:
+    if len(fracs) > 2 and float(np.std(fracs)) > 0:
         t_stat, two_sided = stats.ttest_1samp(fracs, breakeven)
         p_one_sided = two_sided / 2 if t_stat > 0 else 1.0 - two_sided / 2
+    elif len(fracs) > 2:
+        # Zero variance (e.g. every cluster won): the t statistic is
+        # undefined and the old code turned a perfect record into FAIL via
+        # nan. Fall back to an exact binomial on per-cluster majorities -
+        # exact for the size-1 clusters that dominate sparse windows.
+        wins_c = int(sum(1 for f in fracs if f > breakeven))
+        p_one_sided = stats.binomtest(
+            wins_c, len(fracs), breakeven, alternative="greater"
+        ).pvalue
     else:
         p_one_sided = None
     return {
@@ -117,12 +130,25 @@ def verdict(stats_dict: dict, min_clusters: int) -> str:
     return "PASS" if (beats and sig) else "FAIL"
 
 
-def load_bundle(name: str):
+def load_bundle(name: str, cutoff_ts: int | None = None):
+    """Load the newest matching bundle, REFUSING any model whose training
+    data extends past the forward cutoff - a routine retrain after the
+    cutoff would otherwise silently train on the forward window and
+    invalidate the test with no visible sign (audit finding H1)."""
     paths = sorted((PROJECT_DIR / "models").glob(name))
     if not paths:
         raise SystemExit(f"missing models/{name}")
     with open(paths[-1], "rb") as fh:
-        return paths[-1].name, pickle.load(fh)
+        bundle = pickle.load(fh)
+    if cutoff_ts is not None:
+        end = bundle.get("meta", {}).get("data_end_ts")
+        if end is not None and end > cutoff_ts:
+            raise SystemExit(
+                f"{paths[-1].name} trained through {end} > cutoff {cutoff_ts}: "
+                "this model has seen the forward window and must not score it. "
+                "Point at the pre-cutoff pickle explicitly."
+            )
+    return paths[-1].name, bundle
 
 
 def meta_probabilities(meta_bundle, frame: pd.DataFrame, p_up, actions) -> np.ndarray:
@@ -144,10 +170,10 @@ def meta_probabilities(meta_bundle, frame: pd.DataFrame, p_up, actions) -> np.nd
     return meta_bundle["model"].predict_proba(feats[meta_bundle["features"]])[:, 1]
 
 
-def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
-    model_name, bundle = load_bundle("h2-*.pkl")
+def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:  # noqa: C901
+    model_name, bundle = load_bundle("h2-*.pkl", cutoff_ts)
     model, meta = bundle["model"], bundle["meta"]
-    _, meta_bundle = load_bundle("meta-h3.pkl")
+    _, meta_bundle = load_bundle("meta-h3.pkl", cutoff_ts)
     feature_cols = meta["feature_columns"]
 
     conn = open_db()
@@ -156,7 +182,8 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
         candles, _ = load_canonical_history(conn, asset, 60)
         if candles.empty:
             continue
-        ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True)
+        ff = build_features(candles, interval=60, horizon=horizon,
+                            entry_next_open=True, extra_vol=True)
         ff["asset"] = asset
         parts.append(ff)
     pooled = (
@@ -186,7 +213,8 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
         return float(p) if p is not None else payout_fallback
 
     for label, margin in (("h2_primary", H2_PRIMARY_MARGIN),
-                          ("h2_secondary", H2_SECONDARY_MARGIN)):
+                          ("h2_secondary", H2_SECONDARY_MARGIN),
+                          ("h2_ev02_reported", 0.02)):
         trades = []
         for i, p in enumerate(p_up):
             action = decide_action(float(p), payout_fallback, margin)
@@ -197,7 +225,9 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
             ts = int(row["to_ts"])
             trades.append((row["asset"], ts, bool(won), observed_payout(row["asset"], ts)))
         s = cluster_stats(trades, purge_s)
-        s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
+        s["verdict"] = (verdict(s, MIN_CLUSTERS_CANDLES)
+                        if label in REGISTERED_VERDICT_KEYS
+                        else "REPORTED - no pre-registered verdict")
         out[label] = s
 
     # H3 family: primary-gate signals surviving the meta filter, evaluated at
@@ -221,10 +251,34 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
                 won = (row["label_up"] == 1.0) == (actions[i] == "binary_call")
                 ts = int(row["to_ts"])
                 trades.append((row["asset"], ts, bool(won), observed_payout(row["asset"], ts)))
+            key = f"h3_meta{int(thr * 100)}"
             s = cluster_stats(trades, purge_s)
-            s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
+            s["verdict"] = (verdict(s, MIN_CLUSTERS_CANDLES)
+                            if key in REGISTERED_VERDICT_KEYS
+                            else "REPORTED - no pre-registered verdict")
             s["meta_kept"] = f"{len(trades)}/{len(idx)}"
-            out[f"h3_meta{int(thr * 100)}"] = s
+            out[key] = s
+
+    # H4 (registered): the extra-vol model at the primary gate.
+    try:
+        h4_name, h4_bundle = load_bundle("h4-*.pkl", cutoff_ts)
+        h4_cols = h4_bundle["meta"]["feature_columns"]
+        p4 = h4_bundle["model"].predict_proba_up(forward[h4_cols])
+        trades = []
+        for i, p in enumerate(p4):
+            action = decide_action(float(p), payout_fallback, H2_PRIMARY_MARGIN)
+            if action == "no_trade":
+                continue
+            row = forward.iloc[i]
+            won = (row["label_up"] == 1.0) == (action == "binary_call")
+            ts = int(row["to_ts"])
+            trades.append((row["asset"], ts, bool(won), observed_payout(row["asset"], ts)))
+        s4 = cluster_stats(trades, purge_s)
+        s4["verdict"] = verdict(s4, MIN_CLUSTERS_CANDLES)
+        s4["model"] = h4_name
+        out["h4"] = s4
+    except SystemExit as exc:
+        out["h4"] = {"error": str(exc)}
     return out
 
 
@@ -280,7 +334,9 @@ def paper_track(horizon: int) -> dict:
             won = (lab == 1.0) == (s["action"] == "binary_call")
             trades.append((s["asset"], int(s["ts"]), bool(won), float(s["payout"])))
         st = cluster_stats(trades, purge_s)
-        st["verdict"] = verdict(st, MIN_CLUSTERS_PAPER)
+        st["verdict"] = (verdict(st, MIN_CLUSTERS_PAPER) + " (corroborative track)"
+                         if label in REGISTERED_VERDICT_KEYS
+                         else "REPORTED - no pre-registered verdict")
         st["unscored_pending_candles"] = unscored
         out[label] = st
     return out

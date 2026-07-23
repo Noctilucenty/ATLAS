@@ -138,7 +138,11 @@ def main() -> None:
         acc = hold[hold["meta_p"] >= thr]
         if len(acc) < 30:
             continue
-        pval = stats.binomtest(int(acc["won"].sum()), len(acc), base_wr).pvalue
+        # One-sided lift test; note base_wr is itself estimated from this
+        # sample and accepted trades are a subset of it, so treat p as
+        # descriptive, not inferential (audit M4).
+        pval = stats.binomtest(int(acc["won"].sum()), len(acc), base_wr,
+                               alternative="greater").pvalue
         report.append({
             "meta_threshold": thr,
             "trades_kept": f"{len(acc)}/{base_n}",

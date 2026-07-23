@@ -300,6 +300,49 @@ evaluation is untouched and still covers every instrument). A spot-only
 policy variant is the natural candidate for the NEXT window's registration
 if the forward OTC subset confirms this finding.
 
+## Pre-verdict audit corrections (2026-07-24) - recorded before ANY verdict
+
+A three-agent code audit (pipeline correctness / research statistics /
+live execution) ran while the forward window was still verdict-free; all
+evaluator corrections below therefore precede any result they could bias.
+
+REGISTRATION RECONCILIATION: the original H3 registration fixed the
+primary at meta_p >= 0.60; a later same-day note drifted it to 0.65. The
+ORIGINAL registration stands - verdicts are issued only for H2 primary
+(ev 0.03), H2 secondary (ev 0.04), H3 (meta 0.60) and H4 (extra-vol, ev
+0.03), matching ALPHA = 0.05/4. Every other threshold (ev 0.02, meta
+0.65/0.70/0.775) is REPORTED without a pass/fail verdict. H4, registered
+but previously never evaluated, is now evaluated.
+
+EVALUATOR CORRECTIONS (criteria intent unchanged): (1) frozen-model loading
+now refuses any pickle whose training data extends past the cutoff - a
+routine retrain would previously have silently scored the forward window
+with a model trained on it; (2) a zero-variance cluster vector (e.g. a
+100% win record) previously produced a nan p-value and verdict FAIL - it
+now falls back to an exact binomial on cluster majorities; (3) EV
+decisions in the candles track use the causal observed payout, as the
+frozen configuration specified, not the 0.87 fallback.
+
+STATISTICS CORRECTIONS: the acceptance PBO matrix previously spanned
+selection-era blocks whose meta_p were the meta model's predictions on its
+own training rows, biasing PBO toward 0; recomputed on holdout-only blocks
+(out-of-sample for the meta) PBO remains 0.00 - the biased computation's
+conclusion happened to survive honest math. The acceptance Brier check now
+covers ALL holdout rows (0.24943, passes non-vacuously) rather than the
+EV-gated tail. Screening p-values in research_pooled/research_meta now
+test one-sided against the economic break-even instead of two-sided
+against 0.5; in-sample p-values quoted earlier in this document were
+computed under the old flattering null and should be discounted
+accordingly (the forward criteria were always break-even-based and are
+unaffected).
+
+KNOWN LIMITATIONS accepted and documented rather than fixed: the vendored
+library's abandoned timed-out threads can race reconnects (mitigated by
+per-cycle failure bail + relaunch); settlement overrun past the hour can
+delay the next runner start; experiments.py id assignment is racy under
+concurrent training runs; validation does not reject misaligned bar
+spacing (feeds are aligned in practice).
+
 ## Notes
 
 - Real execution frictions (spread at entry, expiry timing, requotes) are

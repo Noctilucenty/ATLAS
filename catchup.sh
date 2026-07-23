@@ -30,8 +30,9 @@ PY
 ASSETS=(${=$(.venv/bin/python -c "from instruments import INSTRUMENTS; print(' '.join(INSTRUMENTS))")})
 
 echo "[$(date -u +%H:%MZ)] backfilling ${HOURS}h for ${#ASSETS} instruments..."
+CATCHUP_OK=1
 .venv/bin/python collector.py candles $ASSETS --interval 60 --hours $HOURS \
-  >> logs/catchup.log 2>&1 || echo "WARN: some candle fetches failed (logs/catchup.log)"
+  >> logs/catchup.log 2>&1 || { echo "WARN: some candle fetches failed (logs/catchup.log)"; CATCHUP_OK=0; }
 .venv/bin/python collector.py payouts >> logs/catchup.log 2>&1 \
   || echo "WARN: payout snapshot failed"
 
@@ -43,4 +44,5 @@ snaps = con.sql("SELECT count(*) FROM payout_snapshots").fetchone()[0]
 print(f"candles {n:,} (newest {(time.time()-latest)/60:.0f} min old), "
       f"payout snapshots {snaps}")
 PY
-date +%s > .last_catchup
+# Only stamp on success - a total failure must not throttle retries for 6h.
+[ "$CATCHUP_OK" = "1" ] && date +%s > .last_catchup

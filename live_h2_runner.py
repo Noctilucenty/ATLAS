@@ -13,6 +13,7 @@ outcomes are scored later against collected candles. Run bounded with
 """
 
 import argparse
+import fcntl
 import json
 import os
 import pickle
@@ -67,6 +68,22 @@ def _load_env() -> None:
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
                 os.environ.setdefault(key.strip(), value.strip())
+
+
+def settle_open_orders(client, open_orders, log_path) -> None:
+    """Query the broker verdict for any still-open orders and append their
+    settled records. Called from every exit path so a failure bail cannot
+    drop execution-attribution data (audit M1)."""
+    for order_id, record in open_orders:
+        try:
+            result, profit = _call(client.check_win_v4, order_id,
+                                   timeout=EXPIRY_MINUTES * 60 + 120)
+            outcome = {**record, "result": result, "profit": profit, "settled": True}
+            with open(log_path, "a") as fh:
+                fh.write(json.dumps(outcome) + "\n")
+        except Exception as exc:
+            print(f"WARN settle {order_id}: {exc}", file=sys.stderr, flush=True)
+    open_orders.clear()
 
 
 def load_frozen_model():
@@ -135,10 +152,10 @@ def normalize(raw: list) -> pd.DataFrame:
 def latest_feature_rows(client, horizon: int) -> pd.DataFrame:
     """One feature row per asset for the most recent CLOSED bar, with
     cross-asset currency-strength columns computed from the same snapshot."""
-    now = time.time()
     per_asset = []
     for asset in INSTRUMENTS:
         try:
+            now = time.time()  # per-asset: early timeouts must not stale the tail
             raw = _call(client.get_candles, asset, 60, CANDLE_COUNT, now, timeout=30)
             candles = normalize(raw)
             # The newest bar may still be forming; keep only closed bars.
@@ -193,6 +210,18 @@ def main() -> int:
     args = parser.parse_args()
 
     _load_env()
+    # Single-instance lock: launchd never doubles a label, but a terminal
+    # run_paper_loop plus the hook's kickstart could produce two runners
+    # double-writing the signal log and double-placing orders (audit H2/H3).
+    lock_file = open(PROJECT_DIR / "logs" / ".runner.lock", "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("another runner instance holds the lock - exiting cleanly", flush=True)
+        return 0
+    lock_file.write(str(os.getpid()))
+    lock_file.flush()
+
     from iqoptionapi.stable_api import IQ_Option
 
     model_name, model, meta = load_frozen_model()
@@ -223,6 +252,18 @@ def main() -> int:
         try:
             frame = latest_feature_rows(client, horizon)
             if frame.empty:
+                # A fully dead connection lands here for every cycle; the
+                # old code skipped both the heartbeat and the failure
+                # counter, defeating the relaunch design (audit live-H1).
+                with open(log_path.with_name("live_h2_heartbeat.jsonl"), "a") as fh:
+                    fh.write(json.dumps({"ts": int(time.time()), "assets": 0,
+                                         "max_conf": None, "signals": 0}) + "\n")
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    print("5 consecutive empty cycles - exiting for relaunch",
+                          file=sys.stderr, flush=True)
+                    settle_open_orders(client, open_orders, log_path)
+                    sys.exit(1)
                 continue
             profits = live_quotes(client)
             p_up = model.predict_proba_up(frame[feature_cols])
@@ -231,8 +272,10 @@ def main() -> int:
                 asset = row["asset"]
                 spec = INSTRUMENTS[asset]
                 quote = profits.get(spec.quote_key, {})
-                payout = quote.get("binary") or quote.get(spec.option_kind)
-                is_open = (cycle_ts - int(row["to_ts"])) < 180  # fresh bar = trading
+                payout = quote.get("binary")
+                if not isinstance(payout, (int, float)) or payout <= 0:
+                    payout = quote.get(spec.option_kind)
+                is_open = (int(time.time()) - int(row["to_ts"])) < 180  # fresh bar = trading
                 if not isinstance(payout, (int, float)) or not is_open:
                     continue
                 action = decide_action(float(p), float(payout), EV_MARGIN)
@@ -249,7 +292,7 @@ def main() -> int:
                     except Exception:
                         pass  # shadow track must never break the primary
                 record = {
-                    "ts": cycle_ts,
+                    "ts": int(time.time()),  # true wall-clock at decision (audit M4)
                     "bar_to_ts": int(row["to_ts"]),
                     "asset": asset,
                     "action": action,
@@ -261,7 +304,7 @@ def main() -> int:
                     "mode": "trade" if args.trade else "paper",
                     # shadow + execution attribution
                     "h4_p": round(h4_p, 6) if h4_p is not None else None,
-                    "decision_latency_s": cycle_ts - int(row["to_ts"]),
+                    "decision_latency_s": int(time.time()) - int(row["to_ts"]),
                 }
                 # OTC EXCLUSION (2026-07-24, research_otc.py): pre-cutoff
                 # broker data shows OTC at 47.1% independent win rate -
@@ -306,17 +349,11 @@ def main() -> int:
             if consecutive_failures >= 5:
                 print("5 consecutive cycle failures - exiting for relaunch",
                       file=sys.stderr, flush=True)
+                settle_open_orders(client, open_orders, log_path)
                 sys.exit(1)
 
     # Collect outcomes for any orders still open before exiting.
-    for order_id, record in open_orders:
-        try:
-            result, profit = _call(client.check_win_v4, order_id, timeout=EXPIRY_MINUTES * 60 + 120)
-            outcome = {**record, "result": result, "profit": profit, "settled": True}
-            with open(log_path, "a") as fh:
-                fh.write(json.dumps(outcome) + "\n")
-        except Exception as exc:
-            print(f"WARN settle {order_id}: {exc}", file=sys.stderr, flush=True)
+    settle_open_orders(client, open_orders, log_path)
     print(f"done {datetime.now(timezone.utc).isoformat()}", flush=True)
     return 0
 

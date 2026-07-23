@@ -119,6 +119,19 @@ def store_dataset(
     return dataset_id
 
 
+def _fields_disagree(a, b) -> bool:
+    """NaN-vs-value counts as a disagreement; NaN-vs-NaN does not. The old
+    abs(a-b)>eps was always False when either side was NaN, silently merging
+    datasets that genuinely disagreed (audit finding)."""
+    import math
+
+    a_nan = isinstance(a, float) and math.isnan(a)
+    b_nan = isinstance(b, float) and math.isnan(b)
+    if a_nan or b_nan:
+        return a_nan != b_nan
+    return abs(a - b) > 1e-9
+
+
 def load_canonical_history(
     conn: duckdb.DuckDBPyConnection, asset: str, interval: int
 ) -> tuple[pd.DataFrame, dict]:
@@ -149,7 +162,7 @@ def load_canonical_history(
         if len(group) > 1:
             first = group.iloc[0]
             for _, other in group.iloc[1:].iterrows():
-                if any(abs(first[f] - other[f]) > 1e-9 for f in ("open", "high", "low", "close", "volume")):
+                if any(_fields_disagree(first[f], other[f]) for f in ("open", "high", "low", "close", "volume")):
                     conflicts.append(
                         {
                             "from_ts": int(from_ts),

@@ -51,7 +51,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 BONFERRONI_ALPHA = 0.05 / 4
 
 
-def build_trades(bundles: list, payout: float) -> pd.DataFrame:
+def build_trades(bundles: list, payout: float):
     allrows = pd.concat([b["preds"] for b in bundles], ignore_index=True)
     base = allrows.copy()
     base["action"] = [decide_action(float(p), payout, 0.0) for p in base["p_up"]]
@@ -69,25 +69,30 @@ def build_trades(bundles: list, payout: float) -> pd.DataFrame:
                                 labels=["low", "mid", "high"])
     sel_mask = (base["to_ts"] < SPLIT_TS).to_numpy()
     base["meta_p"] = fit_meta_on_selection(base, sel_mask)  # leak-free
-    return base, sel_mask
+    return base, sel_mask, allrows
 
 
-def pbo_matrix(base: pd.DataFrame, payout: float, purge_s: int) -> pd.DataFrame:
-    """(config x time-block) win-rate matrix over the WHOLE decade: 8 equal
-    time blocks, configs = the (ev, meta) grid. Cells need >= 30 independent
-    trades or the config is dropped."""
-    ts = base["to_ts"].to_numpy()
+def pbo_matrix(base: pd.DataFrame, sel_mask, payout: float, purge_s: int) -> pd.DataFrame:
+    """(config x time-block) win-rate matrix over HOLDOUT blocks only.
+
+    Audit correction (H2): the earlier whole-decade matrix included
+    selection-era blocks whose meta_p values were the meta model's
+    predictions on its own training rows - grossly inflated, which pushed
+    PBO toward 0 by construction. Holdout-only blocks are genuinely
+    out-of-sample for the meta; the grid now also spans the deployed
+    thresholds (0.70/0.775) with a 20-trade cell floor."""
+    hold = base[~sel_mask].copy()
+    ts = hold["to_ts"].to_numpy()
     edges = np.linspace(ts.min(), ts.max() + 1, 9)
-    base = base.copy()
-    base["block"] = np.digitize(base["to_ts"], edges[1:-1])
+    hold["block"] = np.digitize(hold["to_ts"], edges[1:-1])
     rows = {}
     for ev_m in (0.02, 0.03, 0.04):
-        for mt in (0.0, 0.55, 0.60, 0.65, 0.70):
+        for mt in (0.0, 0.55, 0.60, 0.65, 0.70, 0.775):
             cells = []
             for blk in range(8):
-                g = base[(base["block"] == blk) & (base["ev"] > ev_m) & (base["meta_p"] >= mt)]
+                g = hold[(hold["block"] == blk) & (hold["ev"] > ev_m) & (hold["meta_p"] >= mt)]
                 g = independent(g, purge_s)
-                cells.append(g["won"].mean() if len(g) >= 30 else np.nan)
+                cells.append(g["won"].mean() if len(g) >= 20 else np.nan)
             if not any(np.isnan(c) for c in cells):
                 rows[f"ev{ev_m}/meta{mt}"] = cells
     return pd.DataFrame.from_dict(rows, orient="index",
@@ -108,7 +113,7 @@ def main() -> None:
     purge_s = args.horizon * 60
     breakeven = 1.0 / (1.0 + args.payout)
     bundles = [pickle.load(open(p, "rb")) for p in sorted(glob.glob(args.bundles))]
-    base, sel_mask = build_trades(bundles, args.payout)
+    base, sel_mask, allrows = build_trades(bundles, args.payout)
     hold = base[~sel_mask]
 
     cand = independent(
@@ -120,9 +125,12 @@ def main() -> None:
 
     # -- checks 1..6 --
     p_edge = stats.binomtest(wins, n, breakeven, alternative="greater").pvalue if n else 1.0
-    pbo = pbo_cscv(pbo_matrix(base, args.payout, purge_s))
+    pbo = pbo_cscv(pbo_matrix(base, sel_mask, args.payout, purge_s))
     defl = deflated_win_rate(wins, n, breakeven, n_trials)
-    brier = float(brier_score_loss(hold["label_up"], hold["p_up"]))
+    # Audit correction (L3): Brier over ALL holdout prediction rows, not
+    # the EV-gated tail where the check was near-vacuous.
+    hold_all = allrows[allrows["to_ts"] >= SPLIT_TS].dropna(subset=["label_up"])
+    brier = float(brier_score_loss(hold_all["label_up"], hold_all["p_up"]))
     hold_gated = hold[hold["ev"] > args.candidate_ev]
     meta_ece = ece(hold_gated["meta_p"].to_numpy(), hold_gated["won"].to_numpy())
 

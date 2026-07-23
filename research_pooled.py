@@ -115,6 +115,7 @@ def time_folds(pooled: pd.DataFrame, n_splits: int, purge_s: int):
 
 
 def evaluate_margin(preds: list, margin: float, payout: float, purge_s: int) -> dict:
+    breakeven = 1.0 / (1.0 + payout)
     trades = []
     for asset, ts, p, label in preds:
         action = decide_action(p, payout, margin)
@@ -148,12 +149,17 @@ def evaluate_margin(preds: list, margin: float, payout: float, purge_s: int) -> 
         "raw_trades": len(trades),
         "independent": n,
         "win_rate": round(wins / n, 4) if n else None,
-        "p_ind": round(stats.binomtest(wins, n, 0.5).pvalue, 4) if n else None,
+        # One-sided vs the economic break-even, not a coin flip (audit M1) -
+        # "beats 0.5" is not the claim that matters at a 0.87 payout.
+        "p_ind": (round(stats.binomtest(wins, n, breakeven,
+                                        alternative="greater").pvalue, 6)
+                  if n else None),
         "clusters": len(clusters),
         "cluster_win_frac": round(float(fracs.mean()), 4) if len(fracs) else None,
         "p_cluster": (
-            round(float(stats.ttest_1samp(fracs, 0.5).pvalue), 4)
-            if len(fracs) > 2
+            round(float(stats.ttest_1samp(fracs, breakeven).pvalue / 2), 6)
+            if len(fracs) > 2 and float(np.std(fracs)) > 0
+            and float(np.mean(fracs)) > breakeven
             else None
         ),
     }

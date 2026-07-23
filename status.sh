@@ -1,7 +1,7 @@
 #!/bin/zsh
 # One-glance ATLAS status: agents, data freshness, paper signals, research runs.
 cd "$(dirname "$0")"
-SCRATCH=/private/tmp/claude-501/-Users-leon/8b2276bc-5fac-47db-9a9d-67ec3221e6bc/scratchpad
+SCRATCH="$(dirname "$0")/research_logs"
 
 echo "=== launchd agents (PID / last exit / label) ==="
 launchctl list | grep atlas || echo "  none loaded"

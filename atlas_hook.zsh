@@ -61,7 +61,7 @@ _atlas_agent_watch() {
   if launchctl list 2>/dev/null | grep -q com.atlas.h2-paper; then
     local hb_age=999999
     [ -f "$hb" ] && hb_age=$(( now - $(stat -f %m "$hb" 2>/dev/null || echo 0) ))
-    if [ "$hb_age" -gt 600 ]; then
+    if [ "$hb_age" -gt 4500 ]; then
       launchctl kickstart "gui/$(id -u)/com.atlas.h2-paper" 2>/dev/null
       notify="trade agent restarted (heartbeat was $((hb_age/60))m old)"
     fi
