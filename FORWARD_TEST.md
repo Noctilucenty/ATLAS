@@ -300,6 +300,49 @@ evaluation is untouched and still covers every instrument). A spot-only
 policy variant is the natural candidate for the NEXT window's registration
 if the forward OTC subset confirms this finding.
 
+## SPREAD HAIRCUT — the decisive execution finding (2026-07-24, research_spread.py)
+
+Dukascopy separate BID/ASK m1 candles, 2023-2025, standard pipeline on MID,
+same trades rescored under three settlement rules. Median spread at traded
+bars: 0.7 pips.
+
+| meta gate | mid | half-spread | adverse |
+|---|---|---|---|
+| 0.60 | 58.5% | 45.1% | 35.5% |
+| 0.65 | 59.4% | 45.3% | 34.8% |
+| 0.70 | 61.9% | 46.0% | 34.1% |
+
+MID reproduces the familiar leak-free numbers, confirming the method. The
+alarming part: a mere 0.35-pip half-spread requirement drops the win rate
+12-15 points, below the 53.5% break-even AND below a coin flip. This proves
+the model's directional edge lives in SUB-PIP moves at the 15-minute
+horizon - it is extraordinarily fragile to any execution friction.
+
+FRAMING CORRECTION (recorded honestly): research_spread.py's docstring said
+the truth "sits between mid and adverse". That is WRONG for binary options.
+"Adverse" (enter ask, settle bid) models a SPOT/CFD trade that crosses the
+FULL bid-ask on both legs. A binary option settles on expiry-price vs
+strike-price measured on the broker's SINGLE quoted feed, so it does not
+cross the full spread. The plausible binary range is mid-to-HALF, and even
+the half-spread end is unprofitable.
+
+CONSEQUENCE - this reorders the whole project's priorities:
+- The forward-test candle win rate measures the MID column only; it is no
+  longer the decisive number.
+- The DECISIVE number is IQ's actual binary strike mechanic: does it strike
+  and settle at mid (profitable), or apply any spread (fatal)?
+- Only the $1 PRACTICE demo trial can measure it - IQ's check_win_v4
+  returns the broker's real win/loss, and comparing that to our candle-mid
+  label is a direct measurement of IQ's effective haircut. The demo trial's
+  LABEL-FIDELITY (broker outcome vs candle label agreement) is now the
+  single most important measurement in the project, above the forward
+  window itself.
+
+This is precisely the failure mode that killed the comparable public
+projects (Farxida's 86x paper-vs-backtest collapse). ATLAS has now
+QUANTIFIED the risk offline before spending real money, and pinned the one
+live measurement that resolves it.
+
 ## Pre-verdict audit corrections (2026-07-24) - recorded before ANY verdict
 
 A three-agent code audit (pipeline correctness / research statistics /
