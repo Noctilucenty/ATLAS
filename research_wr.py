@@ -58,7 +58,8 @@ META_CONTEXT = [
 
 
 def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str,
-                 enrich: bool = False) -> dict:
+                 enrich: bool = False, from_year: int = 2016,
+                 to_year: int = 2025) -> dict:
     """Walk-forward predictions + per-fold base-model importances for one pair.
 
     enrich=True additionally computes the extra_vol + extra_mtf feature
@@ -67,7 +68,8 @@ def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str,
     consensus gating can be tested offline. The base p_up stays the
     production feature contract either way."""
     purge_s = horizon * 60
-    candles = load_candles(download_years(pair, range(2016, 2026), Path(cache_dir)))
+    candles = load_candles(download_years(pair, range(from_year, to_year + 1),
+                                          Path(cache_dir)))
     ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True,
                         extra_vol=enrich, extra_mtf=enrich)
     ff = ff.dropna(subset=["label_up"]).reset_index(drop=True)
@@ -259,6 +261,8 @@ def main() -> None:
     ap.add_argument("--compute-pooled", action="store_true",
                     help="global model: train pooled over --pairs, pickle to --dump")
     ap.add_argument("--compute-pair", default=None, help="compute one pair and pickle to --dump")
+    ap.add_argument("--from-year", type=int, default=2016)
+    ap.add_argument("--to-year", type=int, default=2025)
     ap.add_argument("--enrich", action="store_true",
                     help="carry extra_vol+extra_mtf columns and a second enriched direction model (p_up_ext)")
     ap.add_argument("--dump", default=None)
@@ -281,7 +285,8 @@ def main() -> None:
 
     if args.compute_pair:
         bundle = compute_pair(args.compute_pair, args.horizon, args.splits,
-                              args.cache_dir, enrich=args.enrich)
+                              args.cache_dir, enrich=args.enrich,
+                              from_year=args.from_year, to_year=args.to_year)
         with open(args.dump, "wb") as fh:
             pickle.dump(bundle, fh)
         print(f"dumped {args.compute_pair} -> {args.dump}")
