@@ -59,7 +59,7 @@ META_CONTEXT = [
 
 def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str,
                  enrich: bool = False, from_year: int = 2016,
-                 to_year: int = 2025) -> dict:
+                 to_year: int = 2025, extra_dow: bool = False) -> dict:
     """Walk-forward predictions + per-fold base-model importances for one pair.
 
     enrich=True additionally computes the extra_vol + extra_mtf feature
@@ -71,7 +71,7 @@ def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str,
     candles = load_candles(download_years(pair, range(from_year, to_year + 1),
                                           Path(cache_dir)))
     ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True,
-                        extra_vol=enrich, extra_mtf=enrich)
+                        extra_vol=enrich, extra_mtf=enrich, extra_dow=extra_dow)
     ff = ff.dropna(subset=["label_up"]).reset_index(drop=True)
     ts = ff["to_ts"].to_numpy()
     edges = np.linspace(ts[0], ts[-1], splits + 2)
@@ -82,13 +82,17 @@ def compute_pair(pair: str, horizon: int, splits: int, cache_dir: str,
         tr = np.where(ts <= edges[k] - purge_s)[0]
         if not len(te) or len(tr) < 10000:
             continue
+        cols = list(FEATURE_COLUMNS)
+        if extra_dow:
+            from features import EXTRA_DOW_COLUMNS
+            cols += EXTRA_DOW_COLUMNS
         model = ChronoCalibratedModel(n_folds=3, gap=horizon, model_kind="lgbm")
-        model.fit(ff[FEATURE_COLUMNS].iloc[tr], ff["label_up"].iloc[tr])
+        model.fit(ff[cols].iloc[tr], ff["label_up"].iloc[tr])
         base = getattr(model, "base_", None)
         if base is not None and hasattr(base, "feature_importances_"):
             importances.append(dict(zip(FEATURE_COLUMNS, base.feature_importances_)))
         sub = ff.iloc[te].copy()
-        sub["p_up"] = model.predict_proba_up(ff[FEATURE_COLUMNS].iloc[te])
+        sub["p_up"] = model.predict_proba_up(ff[cols].iloc[te])
         if enrich:
             ext = ChronoCalibratedModel(n_folds=3, gap=horizon, model_kind="lgbm")
             ext.fit(ff[ENRICHED_COLUMNS].iloc[tr], ff["label_up"].iloc[tr])
@@ -263,6 +267,8 @@ def main() -> None:
     ap.add_argument("--compute-pair", default=None, help="compute one pair and pickle to --dump")
     ap.add_argument("--from-year", type=int, default=2016)
     ap.add_argument("--to-year", type=int, default=2025)
+    ap.add_argument("--extra-dow", action="store_true",
+                    help="ablation: add day-of-week sin/cos to the direction model")
     ap.add_argument("--enrich", action="store_true",
                     help="carry extra_vol+extra_mtf columns and a second enriched direction model (p_up_ext)")
     ap.add_argument("--dump", default=None)
@@ -286,7 +292,8 @@ def main() -> None:
     if args.compute_pair:
         bundle = compute_pair(args.compute_pair, args.horizon, args.splits,
                               args.cache_dir, enrich=args.enrich,
-                              from_year=args.from_year, to_year=args.to_year)
+                              from_year=args.from_year, to_year=args.to_year,
+                              extra_dow=args.extra_dow)
         with open(args.dump, "wb") as fh:
             pickle.dump(bundle, fh)
         print(f"dumped {args.compute_pair} -> {args.dump}")

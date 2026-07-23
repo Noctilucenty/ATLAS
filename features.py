@@ -56,6 +56,15 @@ EXTRA_MTF_COLUMNS = [
     "h4_ema_dist",
 ]
 
+# Optional day-of-week block (build_features(extra_dow=True)). Hour-of-day
+# is a top-2 feature yet day-of-week is not encoded at all; Friday closes
+# and Monday opens are structurally different regimes. Encoded as sin/cos
+# over the 7-day week (weekends exist for OTC data).
+EXTRA_DOW_COLUMNS = [
+    "dow_sin",
+    "dow_cos",
+]
+
 # Optional HAR-RV block (build_features(extra_har=True)). The heterogeneous
 # autoregressive model of realized volatility is the standard workhorse for
 # volatility forecasting: realized variance measured over short, medium and
@@ -255,6 +264,7 @@ def build_features(
     extra_vol: bool = False,
     extra_har: bool = False,
     extra_mtf: bool = False,
+    extra_dow: bool = False,
 ) -> pd.DataFrame:
     """Compute the curated feature set plus the forward label, gap-aware.
 
@@ -271,7 +281,7 @@ def build_features(
     parts = [
         _build_features_segment(
             segment, interval, horizon, entry_next_open, extra_vol, extra_har,
-            extra_mtf,
+            extra_mtf, extra_dow,
         )
         for segment in segments
     ]
@@ -281,6 +291,7 @@ def build_features(
             (EXTRA_VOL_COLUMNS if extra_vol else [])
             + (EXTRA_HAR_COLUMNS if extra_har else [])
             + (EXTRA_MTF_COLUMNS if extra_mtf else [])
+            + (EXTRA_DOW_COLUMNS if extra_dow else [])
         )
         return pd.DataFrame(
             columns=[
@@ -299,6 +310,7 @@ def _build_features_segment(
     extra_vol: bool = False,
     extra_har: bool = False,
     extra_mtf: bool = False,
+    extra_dow: bool = False,
 ) -> pd.DataFrame:
     # Segments shorter than indicator warmup can't yield any feature row and
     # crash ta's ATR/ADX outright (ADX needs ~2x its window); they
@@ -392,4 +404,10 @@ def _build_features_segment(
     if extra_mtf:
         _mtf_context_features(out, high, low, close, interval)
         required += EXTRA_MTF_COLUMNS
+    if extra_dow:
+        # Unix epoch day 0 was a Thursday; weekday = (days + 3) % 7 (Mon=0).
+        dow = ((out["to_ts"] // 86400 + 3) % 7).astype(float)
+        out["dow_sin"] = np.sin(2 * np.pi * dow / 7.0)
+        out["dow_cos"] = np.cos(2 * np.pi * dow / 7.0)
+        required += EXTRA_DOW_COLUMNS
     return out.dropna(subset=required).reset_index(drop=True)
