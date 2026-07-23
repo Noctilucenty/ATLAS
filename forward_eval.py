@@ -229,16 +229,28 @@ def paper_track(horizon: int) -> dict:
     if not signals:
         return {"error": "paper log is empty"}
 
+    # Score outcomes DIRECTLY from raw candles: a signal at bar_to_ts enters
+    # at the next bar's open and exercises at the close of the bar ending
+    # horizon minutes later. Feature warmup is irrelevant to an outcome, and
+    # requiring it (via build_features) silently dropped scoreable signals
+    # whenever the store had a gap a few hours earlier.
     conn = open_db()
     labels: dict[tuple[str, int], float] = {}
     for asset in {s["asset"] for s in signals}:
         candles, _ = load_canonical_history(conn, asset, 60)
         if candles.empty:
             continue
-        ff = build_features(candles, interval=60, horizon=horizon, entry_next_open=True)
-        for ts, lab in zip(ff["to_ts"].astype(int), ff["label_up"]):
-            if not pd.isna(lab):
-                labels[(asset, int(ts))] = float(lab)
+        opens = dict(zip(candles["from_ts"].astype(int), candles["open"]))
+        closes = dict(zip(candles["to_ts"].astype(int), candles["close"]))
+        for s in signals:
+            if s["asset"] != asset:
+                continue
+            ts = int(s["bar_to_ts"])
+            entry = opens.get(ts)                       # bar starting at ts
+            exercise = closes.get(ts + horizon * 60)
+            if entry is None or exercise is None or exercise == entry:
+                continue  # unresolved: missing bars or a tie
+            labels[(asset, ts)] = float(exercise > entry)
 
     purge_s = horizon * 60
     out = {"paper_signals": len(signals)}
