@@ -151,6 +151,13 @@ thin). The 0.775 operating point passes the full acceptance contract
 trades. It is reported on the forward window as an EXPLORATORY metric only;
 the primary hypothesis remains H3 @ 0.65 and alpha accounting is unchanged.
 
+Breadth scaling (9-pair pooled decade, registered 2026-07-23): pooling 9
+majors instead of 3 leaves the win-rate staircase unchanged (80.6 vs 80.9%
+at meta 0.775) but multiplies independent trades ~2.7x at every threshold
+(1,040 vs 392 at the top). Breadth scales volume, not the ceiling - which
+validates the deployed 16-instrument pooled architecture and shortens any
+future validation window.
+
 Tested against it and REJECTED (all leak-free, same bundles):
 - meta v2 (enriched context: range-vol + H1/H4 positional + causal
   per-asset streak features + enriched-model probability): 78.2% vs v1's
