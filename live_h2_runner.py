@@ -263,7 +263,16 @@ def main() -> int:
                     "h4_p": round(h4_p, 6) if h4_p is not None else None,
                     "decision_latency_s": cycle_ts - int(row["to_ts"]),
                 }
-                if args.trade:
+                # OTC EXCLUSION (2026-07-24, research_otc.py): pre-cutoff
+                # broker data shows OTC at 47.1% independent win rate -
+                # below break-even and below coin flip, while spot runs
+                # 65.5%. The broker synthesises OTC prices, and they resist
+                # the model. Demo orders are placed on spot only; paper
+                # logging (and the frozen hypothesis evaluation) is
+                # untouched and still covers every instrument.
+                if args.trade and asset.endswith("-OTC"):
+                    record["trade_skipped"] = "otc_below_breakeven"
+                elif args.trade:
                     ok, order_id = _call(
                         client.buy, TRADE_AMOUNT, spec.order_active,
                         "call" if action == "binary_call" else "put",

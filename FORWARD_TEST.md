@@ -279,6 +279,22 @@ criteria and cannot influence the pre-registered verdicts. Its results
 gate only the LATER decision of whether candle-based win rates translate
 to executable win rates.
 
+## OTC finding (2026-07-24, research_otc.py, pre-cutoff broker data)
+
+The decade validations were spot-only while 12+ of the 28 live instruments
+are OTC (broker-synthesised prices). Splitting the pre-cutoff broker
+walk-forward: spot 65.5% on 2,103 independent trades; OTC 47.1% on 136 -
+below break-even AND below coin flip, which research contamination cannot
+explain (bias inflates, it does not sink). The deployed meta's bucket slope
+transfers on spot (61->72%) and only weakly on OTC (47->57%).
+
+CONSEQUENCE: the edge is treated as SPOT-ONLY until forward evidence says
+otherwise. The $1 execution track now places orders on spot signals only
+(OTC signals are paper-logged with trade_skipped, so the frozen hypothesis
+evaluation is untouched and still covers every instrument). A spot-only
+policy variant is the natural candidate for the NEXT window's registration
+if the forward OTC subset confirms this finding.
+
 ## Notes
 
 - Real execution frictions (spread at entry, expiry timing, requotes) are
