@@ -1,7 +1,7 @@
 # ATLAS auto-catchup: keeps the forward-test dataset current without any
 # always-on process. Opt in by adding this line to ~/.zshrc:
 #
-#   [ -f ~/Desktop/dev/ATLAS/ATLAS/atlas_hook.zsh ] && source ~/Desktop/dev/ATLAS/ATLAS/atlas_hook.zsh
+#   [ -f ~/dev/ATLAS/ATLAS/atlas_hook.zsh ] && source ~/dev/ATLAS/ATLAS/atlas_hook.zsh
 #
 # Why a shell hook: launchd cannot read this project after a reboot because
 # ~/Desktop is TCC-protected (agents exit 78), but a terminal you launched
@@ -12,7 +12,7 @@
 # the last THROTTLE seconds, run one in the background. Never blocks the
 # prompt, never runs twice concurrently, and stays silent unless it starts.
 
-ATLAS_DIR="${ATLAS_DIR:-$HOME/Desktop/dev/ATLAS/ATLAS}"
+ATLAS_DIR="${ATLAS_DIR:-$HOME/dev/ATLAS/ATLAS}"
 ATLAS_THROTTLE=${ATLAS_THROTTLE:-21600}   # 6h between automatic catchups
 
 atlas_catchup() {

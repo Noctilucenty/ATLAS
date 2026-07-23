@@ -214,6 +214,7 @@ def main() -> int:
     log_path.parent.mkdir(exist_ok=True)
     deadline = time.time() + args.minutes * 60
     open_orders = []
+    consecutive_failures = 0
 
     while time.time() < deadline:
         # Wait for the next minute boundary + 2s so the bar is fully closed.
@@ -286,8 +287,17 @@ def main() -> int:
                     "max_conf": round(float(np.max(np.abs(p_up - 0.5))), 4),
                     "signals": fired,
                 }) + "\n")
+            consecutive_failures = 0
         except Exception as exc:
             print(f"WARN cycle: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            consecutive_failures += 1
+            # A dead websocket/network wastes the whole slot erroring; bail
+            # nonzero so launchd (KeepAlive SuccessfulExit=false) relaunches
+            # immediately with a fresh connection instead of at the next hour.
+            if consecutive_failures >= 5:
+                print("5 consecutive cycle failures - exiting for relaunch",
+                      file=sys.stderr, flush=True)
+                sys.exit(1)
 
     # Collect outcomes for any orders still open before exiting.
     for order_id, record in open_orders:
