@@ -53,7 +53,11 @@ H3_META_THRESHOLD = 0.60          # original H3 primary
 # monotonically with the meta threshold - 61% / 67% / 72% at 0.60 / 0.65 /
 # 0.70. Evaluated together on the forward window; 0.65 is the preferred
 # operating point (best win-rate/volume balance), 0.70 the aggressive one.
-H3_META_THRESHOLDS = (0.60, 0.65, 0.70)
+# 0.775 added 2026-07-22 as an EXPLORATORY reported metric only (decade
+# holdout: 80.9% on 392 trades, all acceptance checks pass; MinTRL ~13
+# trades at that win rate). It is NOT a pass/fail hypothesis - the primary
+# remains H3 @ 0.65 and the alpha accounting is unchanged.
+H3_META_THRESHOLDS = (0.60, 0.65, 0.70, 0.775)
 MIN_CLUSTERS_CANDLES = 30
 MIN_CLUSTERS_PAPER = 20
 

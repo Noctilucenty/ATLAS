@@ -141,6 +141,27 @@ divergence means extra_vol wins more of the trades we would take but
 reshapes burst structure slightly unfavourably. Adopted as a candidate,
 NOT retrofitted into the frozen H2/H3 models.
 
+## Best-option search (2026-07-22, research_best.py, leak-free)
+
+The meta-threshold dial extends monotonically past 0.70: on the pooled
+global bundle the holdout staircase is 73.0 / 75.8 / 77.2 / 80.9% at
+0.70 / 0.725 / 0.75 / 0.775 (392 independent trades at the top; 0.80 goes
+thin). The 0.775 operating point passes the full acceptance contract
+(deflated z 8.2 after a 133-trial penalty, PBO 0.00) and its MinTRL is ~13
+trades. It is reported on the forward window as an EXPLORATORY metric only;
+the primary hypothesis remains H3 @ 0.65 and alpha accounting is unchanged.
+
+Tested against it and REJECTED (all leak-free, same bundles):
+- meta v2 (enriched context: range-vol + H1/H4 positional + causal
+  per-asset streak features + enriched-model probability): 78.2% vs v1's
+  79.1% at 0.775 - no gain.
+- consensus gate (base and enriched direction models must agree): produced
+  byte-identical trade sets at every threshold - surviving high-meta trades
+  already agree; zero effect.
+- per-pair isotonic recalibration: rescales the threshold axis without
+  improving selection at matched volume; useful for stake sizing someday,
+  not for win rate.
+
 ## Rejected levers (2026-07-22) - recorded so they are not re-tried
 
 Both tested on decade EURUSD, identical machinery and row counts.
