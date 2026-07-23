@@ -343,6 +343,31 @@ projects (Farxida's 86x paper-vs-backtest collapse). ATLAS has now
 QUANTIFIED the risk offline before spending real money, and pinned the one
 live measurement that resolves it.
 
+## FEED IDENTIFICATION — mid confirmed historically (2026-07-24)
+
+The spread finding's decisive unknown ("which price is IQ's feed?") was
+answerable from PREVIOUS data after all: joining 62-63k minutes per pair of
+IQ spot candles against Dukascopy bid/ask for the same minutes
+(2026-05-22..07-23):
+
+| pair | IQ vs MID (median, pips) | vs BID | vs ASK | median abs dev |
+|---|---|---|---|---|
+| EURUSD | +0.00 | +0.15 | -0.15 | 0.05 |
+| GBPUSD | -0.05 | +0.30 | -0.40 | 0.05 |
+| USDJPY | +0.00 | +0.25 | -0.20 | 0.05 |
+
+IQ's single price line IS interbank mid to within ~0.05 pips - far below
+the 0.15-0.35 pip half-spread that killed the win rate in the stress
+columns. Binaries settle strike-vs-expiry on this feed, so the MID column
+(57-62%) is the structurally correct central expectation. The collapse
+scenario now requires ORDER-TIME strike manipulation (strike != displayed
+quote), not feed spread - a much narrower residual.
+
+Demo-trial burden accordingly reduced from "decide which column is
+reality" to "confirm no order-time trickery": click-time strike vs our
+next-bar-open assumption (second-level, roughly symmetric), possible
+order-time markup, last-second settlement behaviour.
+
 ## Pre-verdict audit corrections (2026-07-24) - recorded before ANY verdict
 
 A three-agent code audit (pipeline correctness / research statistics /
