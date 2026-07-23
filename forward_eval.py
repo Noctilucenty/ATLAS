@@ -39,7 +39,7 @@ from scipy import stats
 from features import build_features
 from instruments import INSTRUMENTS
 from research_pooled import XS_COLUMNS, add_cross_asset, currencies  # noqa: F401
-from storage import load_canonical_history, open_db
+from storage import latest_payout_before, load_canonical_history, open_db
 from train import decide_action
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -177,6 +177,14 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
     purge_s = horizon * 60
     out = {"forward_rows": len(forward), "model": model_name}
 
+    def observed_payout(asset: str, ts: int) -> float:
+        """Causal payout at signal time from real snapshots; the registered
+        criterion is break-even 'at the payout actually observed', so the
+        assumed fallback applies only where no fresh snapshot exists."""
+        spec = INSTRUMENTS[asset]
+        p = latest_payout_before(conn, spec.quote_key, spec.option_kind, ts, 7200)
+        return float(p) if p is not None else payout_fallback
+
     for label, margin in (("h2_primary", H2_PRIMARY_MARGIN),
                           ("h2_secondary", H2_SECONDARY_MARGIN)):
         trades = []
@@ -186,7 +194,8 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
                 continue
             row = forward.iloc[i]
             won = (row["label_up"] == 1.0) == (action == "binary_call")
-            trades.append((row["asset"], int(row["to_ts"]), bool(won), payout_fallback))
+            ts = int(row["to_ts"])
+            trades.append((row["asset"], ts, bool(won), observed_payout(row["asset"], ts)))
         s = cluster_stats(trades, purge_s)
         s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
         out[label] = s
@@ -210,7 +219,8 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
                     continue
                 row = forward.iloc[i]
                 won = (row["label_up"] == 1.0) == (actions[i] == "binary_call")
-                trades.append((row["asset"], int(row["to_ts"]), bool(won), payout_fallback))
+                ts = int(row["to_ts"])
+                trades.append((row["asset"], ts, bool(won), observed_payout(row["asset"], ts)))
             s = cluster_stats(trades, purge_s)
             s["verdict"] = verdict(s, MIN_CLUSTERS_CANDLES)
             s["meta_kept"] = f"{len(trades)}/{len(idx)}"
