@@ -256,6 +256,29 @@ action at scoring time); the runner additionally logs h4_p (extra-vol
 shadow) and decision_latency_s per signal. The no-model baseline is
 break-even by construction. None of these gates or trades anything.
 
+## Execution-measurement track (started 2026-07-24, $1 PRACTICE trades)
+
+The live paper agent now runs with --trade: every H2-primary-gate signal
+places a $1 PRACTICE 15-minute binary (hard PRACTICE-only guard;
+IQ_ALLOW_REAL=0). Started BEFORE the forward verdict on purpose: demo
+trades cannot contaminate the hypothesis evaluation (signals and their
+candle-scored outcomes are unchanged) and execution friction is a
+multiplicative unknown on top of the statistical edge - the standard way
+backtested edges die in the wild. Measuring it concurrently shortens the
+road to a real conclusion.
+
+What this track measures, per trade: broker outcome (check_win_v4) vs our
+candle-label outcome (agreement rate = label fidelity), realised payout vs
+quoted, order rejections, and expiry-alignment effects (broker binary
+expiries snap to clock boundaries; our labels assume 15 minutes from the
+signal bar - the disagreement rate IS the measurement). Stakes are $1 on a
+resettable demo balance; ~6 trades/day expected at the 0.03 gate.
+
+This track is a MEASUREMENT, not a hypothesis: it has no pass/fail
+criteria and cannot influence the pre-registered verdicts. Its results
+gate only the LATER decision of whether candle-based win rates translate
+to executable win rates.
+
 ## Notes
 
 - Real execution frictions (spread at entry, expiry timing, requotes) are
