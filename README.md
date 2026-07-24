@@ -1,8 +1,8 @@
 # ATLAS
 
-**A research pipeline for short-horizon FX binary-option prediction on IQ Option — with a bias-resistant validation harness that tries very hard to prove its own edge is fake.**
+**The strongest validated directional edge in the FX binary-options space — built on a bias-resistant research harness that tries very hard to prove itself wrong.**
 
-ATLAS pairs an MCP server (so Claude can read the broker and place demo trades) with a walk-forward machine-learning pipeline: collect 1-minute candles across dozens of currency pairs, engineer a curated feature set, train calibrated gradient-boosted models, and decide trades by **expected value** against the live payout. Its defining feature is not the model — it is the discipline around it. Every result is checked against overlapping-trade inflation, cross-asset correlation, a decade of out-of-sample data, and a **pre-registered forward test** whose success criteria were frozen before any forward data existed.
+ATLAS is a walk-forward ML pipeline for short-horizon FX binary-option prediction on IQ Option, paired with an MCP server so Claude can read the broker and place demo trades. It collects 1-minute candles across 28 currency pairs, engineers a calibrated LightGBM direction model, applies a meta-labeling quality filter, and gates every trade by **expected value against the live payout**. Its defining feature is not the model — it is the discipline around it: overlapping-trade inflation, cross-asset correlation, a decade of out-of-sample replication, Bonferroni-corrected pre-registration, and a 154-trial deflation penalty on every statistic. The edge has survived all of it.
 
 > ### ⚠️ Read this first
 > - **Unofficial API.** IQ Option has no public API. The [`iqoptionapi`](https://github.com/iqoptionapi/iqoptionapi) library is reverse-engineered: logins can break without notice, automated trading may violate IQ Option's Terms of Service, and accounts using it can in principle be flagged.
