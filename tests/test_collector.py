@@ -99,7 +99,7 @@ def test_spot_spec_binds_all_keys_explicitly():
     spec = get_instrument("EURUSD")
     assert spec.candle_asset == "EURUSD"
     assert spec.quote_key == "EURUSD-op"      # payout AND openness, same key
-    assert spec.order_active == "EURUSD"
+    assert spec.order_active == "EURUSD-op"  # live active since 2026-07-24 repair
     assert spec.option_kind in ("turbo", "binary")
 
 def test_otc_spec_is_fully_self_keyed():

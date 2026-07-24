@@ -115,10 +115,12 @@ def test_bundle_roundtrip_verifies(tmp_path, fake_midas):
     assert manifest["experiment_id"] == 7
     assert manifest["candles_sha256"] and manifest["signals_sha256"] and manifest["folds_sha256"]
     assert manifest["midas_binary_sha256"]
-    # The exact backtested contract travels with the bundle.
+    # The exact backtested contract travels with the bundle. (order_active
+    # is the '-op' instrument since the 2026-07-24 execution repair - the
+    # broker retired the legacy plain-FX actives.)
     assert manifest["contract"] == {
         "asset": "EURUSD",
-        "order_active": "EURUSD",
+        "order_active": "EURUSD-op",
         "option_kind": "turbo",
         "expiry_seconds": 300,
     }
@@ -196,13 +198,13 @@ def test_guarded_buy_places_order_only_on_exact_contract_match():
 
     spec = get_instrument("EURUSD")  # 1-minute turbo on EURUSD
     matching = {
-        "contract": {"asset": "EURUSD", "order_active": "EURUSD",
+        "contract": {"asset": "EURUSD", "order_active": "EURUSD-op",
                      "option_kind": "turbo", "expiry_seconds": 60}
     }
     broker = BrokerSpy()
     ok, order_id = guarded_buy(broker, _direct_call, matching, spec, 1.0, "call")
     assert ok and order_id == 12345
-    assert broker.calls == [(1.0, "EURUSD", "call", 1)]
+    assert broker.calls == [(1.0, "EURUSD-op", "call", 1)]
 
 
 def test_guarded_buy_blocks_every_mismatch_before_broker_call():
@@ -236,7 +238,7 @@ def test_guarded_buy_validates_direction_and_amount_after_contract():
 
     spec = get_instrument("EURUSD")
     matching = {
-        "contract": {"asset": "EURUSD", "order_active": "EURUSD",
+        "contract": {"asset": "EURUSD", "order_active": "EURUSD-op",
                      "option_kind": "turbo", "expiry_seconds": 60}
     }
     broker = BrokerSpy()

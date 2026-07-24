@@ -34,7 +34,7 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "EURUSD": InstrumentSpec(
         candle_asset="EURUSD",
         quote_key="EURUSD-op",
-        order_active="EURUSD",
+        order_active="EURUSD-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
@@ -51,7 +51,7 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "GBPUSD": InstrumentSpec(
         candle_asset="GBPUSD",
         quote_key="GBPUSD-op",
-        order_active="GBPUSD",
+        order_active="GBPUSD-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
@@ -65,7 +65,7 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "USDJPY": InstrumentSpec(
         candle_asset="USDJPY",
         quote_key="USDJPY-op",
-        order_active="USDJPY",
+        order_active="USDJPY-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
@@ -79,7 +79,7 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "AUDUSD": InstrumentSpec(
         candle_asset="AUDUSD",
         quote_key="AUDUSD-op",
-        order_active="AUDUSD",
+        order_active="AUDUSD-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
@@ -95,7 +95,7 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "EURJPY": InstrumentSpec(
         candle_asset="EURJPY",
         quote_key="EURJPY-op",
-        order_active="EURJPY",
+        order_active="EURJPY-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
@@ -154,14 +154,14 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "NZDUSD": InstrumentSpec(
         candle_asset="NZDUSD",
         quote_key="NZDUSD-op",
-        order_active="NZDUSD",
+        order_active="NZDUSD-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "USDCAD": InstrumentSpec(
         candle_asset="USDCAD",
         quote_key="USDCAD-op",
-        order_active="USDCAD",
+        order_active="USDCAD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
@@ -179,49 +179,49 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "GBPJPY": InstrumentSpec(
         candle_asset="GBPJPY",
         quote_key="GBPJPY-op",
-        order_active="GBPJPY",
+        order_active="GBPJPY-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "AUDJPY": InstrumentSpec(
         candle_asset="AUDJPY",
         quote_key="AUDJPY-op",
-        order_active="AUDJPY",
+        order_active="AUDJPY-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "EURCHF": InstrumentSpec(
         candle_asset="EURCHF",
         quote_key="EURCHF-op",
-        order_active="EURCHF",
+        order_active="EURCHF-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "GBPCHF": InstrumentSpec(
         candle_asset="GBPCHF",
         quote_key="GBPCHF-op",
-        order_active="GBPCHF",
+        order_active="GBPCHF-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "EURGBP": InstrumentSpec(
         candle_asset="EURGBP",
         quote_key="EURGBP-op",
-        order_active="EURGBP",
+        order_active="EURGBP-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "AUDCAD": InstrumentSpec(
         candle_asset="AUDCAD",
         quote_key="AUDCAD-op",
-        order_active="AUDCAD",
+        order_active="AUDCAD-op",
         option_kind="turbo",
         expiry_minutes=1,
     ),
     "EURAUD": InstrumentSpec(
         candle_asset="EURAUD",
         quote_key="EURAUD-op",
-        order_active="EURAUD",
+        order_active="EURAUD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
@@ -248,77 +248,77 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
     "AUDNZD": InstrumentSpec(
         candle_asset="AUDNZD",
         quote_key="AUDNZD-op",
-        order_active="AUDNZD",
+        order_active="AUDNZD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "EURNZD": InstrumentSpec(
         candle_asset="EURNZD",
         quote_key="EURNZD-op",
-        order_active="EURNZD",
+        order_active="EURNZD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "GBPNZD": InstrumentSpec(
         candle_asset="GBPNZD",
         quote_key="GBPNZD-op",
-        order_active="GBPNZD",
+        order_active="GBPNZD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "NZDJPY": InstrumentSpec(
         candle_asset="NZDJPY",
         quote_key="NZDJPY-op",
-        order_active="NZDJPY",
+        order_active="NZDJPY-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "NZDCAD": InstrumentSpec(
         candle_asset="NZDCAD",
         quote_key="NZDCAD-op",
-        order_active="NZDCAD",
+        order_active="NZDCAD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "CADCHF": InstrumentSpec(
         candle_asset="CADCHF",
         quote_key="CADCHF-op",
-        order_active="CADCHF",
+        order_active="CADCHF-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "AUDCHF": InstrumentSpec(
         candle_asset="AUDCHF",
         quote_key="AUDCHF-op",
-        order_active="AUDCHF",
+        order_active="AUDCHF-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "CHFJPY": InstrumentSpec(
         candle_asset="CHFJPY",
         quote_key="CHFJPY-op",
-        order_active="CHFJPY",
+        order_active="CHFJPY-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "EURCAD": InstrumentSpec(
         candle_asset="EURCAD",
         quote_key="EURCAD-op",
-        order_active="EURCAD",
+        order_active="EURCAD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "GBPCAD": InstrumentSpec(
         candle_asset="GBPCAD",
         quote_key="GBPCAD-op",
-        order_active="GBPCAD",
+        order_active="GBPCAD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
     "XAUUSD": InstrumentSpec(
         candle_asset="XAUUSD",
         quote_key="XAUUSD-op",
-        order_active="XAUUSD",
+        order_active="XAUUSD-op",
         option_kind="binary",
         expiry_minutes=1,
     ),
@@ -356,3 +356,36 @@ def get_instrument(asset: str) -> InstrumentSpec:
             f"no instrument spec for '{asset}' - add an explicit entry to "
             f"instruments.INSTRUMENTS (known: {sorted(INSTRUMENTS)})"
         ) from None
+
+# ---------------------------------------------------------------------------
+# Execution repair (2026-07-24): the broker RETIRED the legacy plain-FX
+# binary actives - client.buy against them fails with "the asset is not
+# available at the moment" (observed on the first 4 demo-trial orders).
+# The live order books are the '-op' instruments (verified via
+# get_all_init_v2: 230 binary actives, zero plain-FX names). order_active
+# above therefore uses '-op' keys, and because the vendored iqoptionapi
+# constants predate those actives, their server-confirmed ids are injected
+# here - the one place every executor resolves order keys.
+_OP_ACTIVE_IDS = {
+    "AUDCAD-op": 1868, "AUDCHF-op": 1884, "AUDJPY-op": 1869,
+    "AUDNZD-op": 1900, "AUDUSD-op": 1870, "CADCHF-op": 1871,
+    "CHFJPY-op": 1873, "EURAUD-op": 1874, "EURCAD-op": 1875,
+    "EURCHF-op": 1876, "EURGBP-op": 1862, "EURJPY-op": 1864,
+    "EURNZD-op": 1901, "EURUSD-op": 1861, "GBPCAD-op": 1897,
+    "GBPCHF-op": 1898, "GBPJPY-op": 1866, "GBPNZD-op": 1880,
+    "GBPUSD-op": 1867, "NZDCAD-op": 1881, "NZDJPY-op": 1882,
+    "NZDUSD-op": 1896, "USDCAD-op": 1878, "USDJPY-op": 1865,
+    "XAUUSD-op": 1912,
+}
+
+
+def _inject_op_actives() -> None:
+    try:
+        from iqoptionapi import constants as _constants
+    except Exception:  # analysis environments without the vendored library
+        return
+    for _key, _active_id in _OP_ACTIVE_IDS.items():
+        _constants.ACTIVES.setdefault(_key, _active_id)
+
+
+_inject_op_actives()
