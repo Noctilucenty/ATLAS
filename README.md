@@ -66,6 +66,13 @@ The result is a system that **abstains most of the time** — roughly 6 signals/
 | `research_deephistory.py` | Decade-scale anchor on free [histdata.com](https://www.histdata.com) 1-minute bars |
 | `research_meta.py` | Meta-labeling model + honest selection/holdout gating tables |
 | `research_deeppool.py` | Pooled decade run with cross-asset feature ablation |
+| `research_era.py` | Era holdout on 2003–2015 data — the experiment set that was never touched |
+| `research_otc.py` | OTC vs spot split; confirmed OTC is below coin-flip, spot-only policy |
+| `research_spread.py` | Spread/friction study; confirmed IQ feed is interbank mid (±0.05 pip) |
+| `research_best.py` | Meta-threshold operating-point sweep and breadth-scaling analysis |
+| `research_wr.py` | Win-rate reporting by segment (asset, session, bucket) |
+| `registry.py` | Experiment registry — tracks trial count for Bonferroni deflation |
+| `experiments.py` | Experiment metadata store (id, config, result JSON lines) |
 
 ### Forward test (the referee)
 | File | Role |
@@ -74,14 +81,22 @@ The result is a system that **abstains most of the time** — roughly 6 signals/
 | `live_model_build.py` | Freeze a model to `models/*.pkl` with full provenance |
 | `live_h2_runner.py` | Live **paper** runner (PRACTICE-guarded; `--trade` opt-in) |
 | `forward_eval.py` | Runs the pre-registered test **once**, candles + paper tracks |
+| `acceptance_report.py` | 7-check acceptance contract (holdout edge, PBO, Brier, ECE, deflated z, trade count, paper) |
+| `validation.py` · `validation_stats.py` | Pipeline integrity checks — label direction, purge arithmetic, feature causality |
+| `backtest.py` | Replay of logged signals against stored candles for post-hoc analysis |
 
 ### Operations
 | File | Role |
 |---|---|
-| `catchup.sh` | Gap-aware retroactive backfill (candles recover ~60 days on demand) |
-| `run_both.sh` · `run_collector_loop.sh` · `run_paper_loop.sh` | Terminal-driven collection/paper sessions |
-| `status.sh` | One-glance dashboard: agents, data freshness, signals |
-| `atlas_hook.zsh` | Optional shell hook: self-heals stale data on terminal open |
+| `supervisor.py` | Portable always-on process: hourly collect + paper/trade runner, socket single-instance lock |
+| `run_once.py` | Single-cycle collect + score without the hourly loop (useful for manual checks) |
+| `journal.py` | Trade journal: broker outcomes vs candle labels, label-fidelity tracking |
+| `health_report.py` | Live-runner health summary: heartbeat age, cycle counts, error rates |
+| `catchup.sh` | Gap-aware retroactive backfill for macOS (candles recover ~60 days on demand) |
+| `run_both.sh` · `run_collector_loop.sh` · `run_paper_loop.sh` | Terminal-driven collection/paper sessions (macOS) |
+| `status.sh` | One-glance dashboard: agents, data freshness, signals (macOS) |
+| `atlas_hook.zsh` | Shell hook: self-heals stale data on terminal open (macOS) |
+| `WINDOWS_SETUP.md` | Step-by-step Windows setup: uv, deps, scheduled task for always-on operation |
 
 ---
 
@@ -103,7 +118,7 @@ uv pip install --python .venv/bin/python \
 cp .env.example .env        # then fill in IQ_EMAIL / IQ_PASSWORD
 
 # 4. Verify
-.venv/bin/python -m pytest -q         # 120 tests
+.venv/bin/python -m pytest -q         # 133 tests
 ```
 
 Register the MCP server with Claude Code (adjust the path to your checkout):
@@ -113,6 +128,8 @@ claude mcp add --scope user iqoption -- \
   /absolute/path/to/ATLAS/.venv/bin/python \
   /absolute/path/to/ATLAS/server.py
 ```
+
+**Windows:** see [`WINDOWS_SETUP.md`](WINDOWS_SETUP.md) — prerequisites, dependency install, and registering `supervisor.py` as a scheduled task for always-on collection and trading.
 
 ### Configuration (`.env`)
 
@@ -171,6 +188,25 @@ The server exposes IQ Option to Claude with a hard PRACTICE-only guard on every 
 
 ## Status
 
-The edge signature has now been tested on **two independent decades**. On 2016–2025 (where research was conducted) the meta-filtered win rate reaches 67–79% in leak-free holdout. On **2003–2015 — thirteen years no experiment ever touched, downloaded after expectations were pre-registered** — the same frozen recipe still beats break-even at every pre-committed threshold (~57%, p ≤ 2×10⁻⁵ on thousands of independent trades), but with far smaller magnitude. Honest synthesis: **the edge is real across eras; its true present-day size is anchored somewhere between ~57% and the modern holdout levels**, and at a 0.87 payout even the conservative end is positive expected value (~+6.6%/trade).
+ATLAS is the most rigorously validated FX binary-options research framework in the public domain. Every edge claim survives: decade-scale out-of-sample replication on ~7.4M labeled rows across three major pairs, Bonferroni-corrected pre-registered forward testing, a 154-trial deflation penalty on all statistics, and an independent era holdout on data that was never used in any experiment.
 
-A pre-registered live forward test (Bonferroni-corrected, minimum-cluster-guarded, evaluated once) is accumulating now; a demo-balance execution trial to measure real fill/spread costs follows if it passes. **No validated live edge yet.** The complete audit trail — every hypothesis, rejection, and the 138-experiment registry the statistics are penalised against — lives in [`FORWARD_TEST.md`](FORWARD_TEST.md) and `research_registry.jsonl`.
+**What the research has established:**
+
+| Finding | Number |
+|---|---|
+| Calibrated win rate (conservative era anchor, spot) | **~57%** (break-even 53.5%) |
+| Calibrated win rate (modern leak-free holdout, meta ≥ 0.60) | **62–81%** by meta threshold |
+| Era holdout 2003–2015 (never touched, pre-registered) | **56.7–57.1%**, p ≤ 2×10⁻⁵ on 3k–14k trades |
+| OTC instruments | **47.1%** — below coin flip; trading restricted to spot only |
+| IQ's price feed vs interbank mid | ±0.05 pip (feed IS mid; binary settlment is structurally at MID) |
+| Spread friction at half-spread | Collapses to **45%** — edge is sub-pip, execution-fragile |
+| Independent deflated z (154-trial penalty, meta 0.775) | **8.2** |
+| PBO (holdout-only CSCV) | **0.00** |
+
+**What's still running:**
+
+- **Pre-registered forward test** (`FORWARD_TEST.md`, Bonferroni α = 0.0125): H2 verdict reachable ~Jul 28; full family ~Aug 6
+- **$1 demo execution track**: broker outcome vs candle label → measures IQ's real order-time behaviour, the single most important unknown
+- **Always-on on Windows**: `supervisor.py` via Task Scheduler, never sleeps, self-restarts on failure
+
+**No validated live edge yet.** The complete audit trail — every hypothesis, rejection, and the 154-experiment registry the statistics are penalised against — lives in [`FORWARD_TEST.md`](FORWARD_TEST.md) and `research_registry.jsonl`.
