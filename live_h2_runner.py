@@ -318,16 +318,34 @@ def main() -> int:
                 if args.trade and asset.endswith("-OTC"):
                     record["trade_skipped"] = "otc_below_breakeven"
                 elif args.trade:
-                    ok, order_id = _call(
-                        client.buy, TRADE_AMOUNT, spec.order_active,
-                        "call" if action == "binary_call" else "put",
-                        EXPIRY_MINUTES, timeout=60,
-                    )
-                    record["order_id"] = order_id if ok else None
-                    if not ok:
-                        record["order_error"] = str(order_id)
+                    # PER-ORDER PRACTICE GUARD (2026-07-24). The startup check
+                    # asserts the balance mode once for a session that then
+                    # runs 57 minutes; the mode can change server-side. An
+                    # "Insufficient funds" rejection - impossible against the
+                    # $10k demo balance, and matching the 0.86 BRL REAL one -
+                    # showed real money was protected by luck, not by design.
+                    # Refuse rather than switch: skipping a trade costs one
+                    # data point, a real order costs real money.
+                    try:
+                        mode = _call(client.get_balance_mode, timeout=30)
+                    except Exception as exc:
+                        mode = f"unreadable:{type(exc).__name__}"
+                    if mode != "PRACTICE":
+                        record["trade_skipped"] = f"balance_mode_{mode}"
+                        print(f"REFUSING ORDER {asset}: balance mode is "
+                              f"{mode!r}, not PRACTICE",
+                              file=sys.stderr, flush=True)
                     else:
-                        open_orders.append((order_id, record))
+                        ok, order_id = _call(
+                            client.buy, TRADE_AMOUNT, spec.order_active,
+                            "call" if action == "binary_call" else "put",
+                            EXPIRY_MINUTES, timeout=60,
+                        )
+                        record["order_id"] = order_id if ok else None
+                        if not ok:
+                            record["order_error"] = str(order_id)
+                        else:
+                            open_orders.append((order_id, record))
                 with open(log_path, "a") as fh:
                     fh.write(json.dumps(record) + "\n")
                 print(json.dumps(record), flush=True)
