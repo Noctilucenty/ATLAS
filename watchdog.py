@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,12 +65,38 @@ def port_listening(port: int, host: str = "127.0.0.1") -> bool:
         return False
 
 
+def dashboard_alive(port: int = DASHBOARD_PORT) -> tuple[bool, str]:
+    """(ours_and_serving, detail).
+
+    A bare TCP accept is not proof the dashboard is up - any process that
+    grabs 8787 would suppress respawn forever (audit 2026-07-24). Ask the
+    API endpoint and require our own payload shape.
+    """
+    if not port_listening(port):
+        return False, "nothing listening"
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/data", timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        if isinstance(payload, dict) and "status" in payload:
+            return True, "ok"
+        return False, "foreign listener (unexpected payload)"
+    except Exception as exc:
+        return False, f"foreign or broken listener ({type(exc).__name__})"
+
+
 def ensure_dashboard() -> None:
-    """Self-heal the dashboard: if nothing answers on its port, spawn it
-    detached with pythonw (no window). At most one spawn per watchdog run;
-    dashboard.py binding the port is the only success criterion, so a crash
-    just means another try in 15 minutes."""
-    if port_listening(DASHBOARD_PORT):
+    """Self-heal the dashboard: if our API does not answer on its port,
+    spawn it detached with pythonw (no window). At most one spawn per
+    watchdog run; a crash just means another try in 15 minutes."""
+    alive, detail = dashboard_alive(DASHBOARD_PORT)
+    if alive:
+        return
+    if detail.startswith("foreign"):
+        # Spawning would only lose the bind race and spam the log; the
+        # operator has to free the port.
+        log(f"dashboard port {DASHBOARD_PORT} held by another process "
+            f"- {detail}; not respawning")
         return
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     exe = pythonw if pythonw.exists() else Path(sys.executable)
@@ -91,7 +118,7 @@ def load_state() -> dict:
         return {}
 
 
-def main() -> int:
+def _run() -> int:
     now = int(time.time())
     status = build_status(now=now, deep=False)
     tier, reasons = status["tier"], status["reasons"]
@@ -99,14 +126,16 @@ def main() -> int:
     prev_tier = state.get("tier", "HEALTHY")
     last_alert = state.get("last_alert_ts", 0)
 
-    log(f"tier={tier}" + (f" reasons={'; '.join(reasons)}" if reasons else ""))
-
     if tier == "CRITICAL":
         if prev_tier != "CRITICAL" or now - last_alert >= REALERT_S:
             ok = toast("ATLAS CRITICAL - trader down",
                        "; ".join(reasons)[:180] or "unknown")
             log(f"alert sent (toast={'ok' if ok else 'failed'})")
-            state["last_alert_ts"] = now
+            # Only a DELIVERED alert starts the 2h quiet period. Counting a
+            # failed toast would buy silence per failed attempt and could
+            # hide the outage indefinitely (audit 2026-07-24).
+            if ok:
+                state["last_alert_ts"] = now
     elif prev_tier == "CRITICAL":
         toast("ATLAS recovered", "health back to " + tier)
         log("recovery alert sent")
@@ -116,7 +145,30 @@ def main() -> int:
     state["tier"] = tier
     LOGS.mkdir(exist_ok=True)
     STATE_PATH.write_text(json.dumps(state))
+    # Logged last: an exception earlier must not be masked by a tidy line,
+    # and the barrier in main() reports the failure instead.
+    log(f"tier={tier}" + (f" reasons={'; '.join(reasons)}" if reasons else ""))
     return 0
+
+
+def main() -> int:
+    """Exception barrier: the watchdog is the only thing watching the
+    trader, and nothing watches the watchdog. A crash here must never be
+    silent (pythonw discards tracebacks), so failures are alerted and
+    recorded on a best-effort basis and reported through the exit code."""
+    try:
+        return _run()
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        try:
+            toast("ATLAS watchdog error", detail[:180])
+        except Exception:
+            pass
+        try:
+            log(f"WATCHDOG ERROR {detail}")
+        except Exception:
+            pass  # e.g. the disk-full case that caused it
+        return 2
 
 
 if __name__ == "__main__":

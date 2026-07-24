@@ -41,7 +41,14 @@ EXTRA_ACTIVE_IDS = {
 LOOKBACK_HOURS = 4.0  # self-heals a missed cycle
 
 
-def main() -> int:
+def _log(line: str) -> None:
+    LOG.parent.mkdir(exist_ok=True)
+    with open(LOG, "a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    print(line)
+
+
+def _run() -> int:
     from iqoptionapi import constants
 
     for name, active_id in EXTRA_ACTIVE_IDS.items():
@@ -54,16 +61,30 @@ def main() -> int:
     failed = [r for r in results if "error" in r]
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     ok_part = ", ".join(f"{r['asset']}:{r['candles']}" for r in stored)
-    bad_part = ", ".join(r["asset"] for r in failed)
-    line = (f"[{stamp}] stored={len(stored)} ({ok_part}) "
-            f"failed={len(failed)} ({bad_part})")
-    LOG.parent.mkdir(exist_ok=True)
-    with open(LOG, "a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
-    print(json.dumps(results, indent=2))
-    # Exit 0 always: closed-market cycles are expected, and Task Scheduler
-    # must not treat them as task failure.
-    return 0
+    # Causes, not just names: print() is a no-op under pythonw, so the log
+    # line is the ONLY channel that survives (audit 2026-07-24).
+    bad_part = ", ".join(f"{r['asset']}[{r['error'][:60]}]" for r in failed)
+    _log(f"[{stamp}] stored={len(stored)} ({ok_part}) "
+         f"failed={len(failed)} ({bad_part})")
+    # Partial failure is normal (quoted-hours assets are shut outside their
+    # window), so it exits 0. Everything failing is not: the 24/7 synthetics
+    # should always store, so a total wipe means login/lock/network trouble
+    # and must show up in Task Scheduler's Last Result.
+    return 0 if stored else 1
+
+
+def main() -> int:
+    try:
+        return _run()
+    except BaseException as exc:  # SystemExit from a failed login included
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        try:
+            _log(f"[{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}] "
+                 f"FAILED {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+        return 2
 
 
 if __name__ == "__main__":

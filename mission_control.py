@@ -36,6 +36,18 @@ HEARTBEAT_STALE_S = 600     # runner cycles each minute; 10 min quiet = down
 CANDLE_STALE_S = 9000       # mirrors health_report.STALE_CANDLE_S
 CHURN_WINDOW_S = 600        # repeated runner exits inside 10 min = lock churn
 
+# Sidecar jobs write one timestamped line per run. Nothing else observes
+# them - their Task Scheduler exit codes are unread and pythonw discards
+# their tracebacks - so a silently dead sidecar is invisible without this
+# (audit 2026-07-24). Stale = no line in 2.5x its cadence.
+SIDECARS = {
+    "extra-collect": (LOGS / "extra_collect.log", 3600),
+    "catchup": (LOGS / "catchup.log", 6 * 3600),
+    "backup": (LOGS / "backup.log", 6 * 3600),
+}
+SIDECAR_STALE_FACTOR = 2.5
+LOG_STAMP_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\]")
+
 # Pre-registered verdict set - DISPLAY ONLY, never evaluated here.
 REGISTERED_SET = ("H2p ev0.03", "H2s ev0.04", "H3 meta0.60", "H4")
 
@@ -149,6 +161,48 @@ def parse_supervisor_events(tail_lines: list[str]) -> list[tuple[int, str]]:
                  .replace(tzinfo=timezone.utc).timestamp())
         events.append((ts, m.group(2)))
     return events
+
+
+def last_log_entry(path: Path) -> tuple[int | None, str]:
+    """(epoch, text) of the newest '[ISO8601Z] ...' line in a sidecar log.
+    Missing file or no parseable line -> (None, '')."""
+    if not path.exists():
+        return None, ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None, ""
+    for line in reversed(lines):
+        m = LOG_STAMP_RE.match(line.strip())
+        if not m:
+            continue
+        ts = int(datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S")
+                 .replace(tzinfo=timezone.utc).timestamp())
+        return ts, line.strip()
+    return None, ""
+
+
+def sidecar_health(now: int, sidecars: dict | None = None) -> dict:
+    """Per-sidecar freshness and last-run outcome. Pure w.r.t. the clock so
+    it can be unit-tested."""
+    out = {}
+    for name, (path, cadence_s) in (sidecars or SIDECARS).items():
+        ts, line = last_log_entry(path)
+        age = (now - ts) if ts is not None else None
+        # 'never ran' is only a finding once the cadence has elapsed since
+        # the process started caring; treat a missing log as stale so a
+        # sidecar that never fires cannot hide.
+        stale = age is None or age > cadence_s * SIDECAR_STALE_FACTOR
+        out[name] = {
+            "last_ts": ts,
+            "age_s": age,
+            "cadence_s": cadence_s,
+            "stale": stale,
+            "failed": ("FAILED" in line) or ("failed=" in line
+                                             and "failed=0" not in line),
+            "last_line": line[-160:],
+        }
+    return out
 
 
 def runner_churn(events: list[tuple[int, str]], now: int,
@@ -304,7 +358,8 @@ def label_fidelity(settled: list[dict], closes_fn=candle_closes) -> dict:
 
 def classify_health(*, now: int, heartbeat_ts: int | None, task_status: str | None,
                     churn_events: int, latest_candle_ts: int | None,
-                    supervisor_seen: bool) -> tuple[str, list[str]]:
+                    supervisor_seen: bool,
+                    sidecars: dict | None = None) -> tuple[str, list[str]]:
     """Three-tier health. CRITICAL = trading is not happening; WARNING =
     trading continues but something needs eyes; HEALTHY otherwise."""
     reasons: list[str] = []
@@ -339,6 +394,16 @@ def classify_health(*, now: int, heartbeat_ts: int | None, task_status: str | No
     if latest_candle_ts is not None and now - latest_candle_ts > CANDLE_STALE_S:
         warn(f"latest candle {now - latest_candle_ts}s old (> {CANDLE_STALE_S}s)")
 
+    # Sidecars never block trading, so their trouble is a WARNING - but it
+    # must be visible somewhere, which before this was nowhere at all.
+    for name, s in (sidecars or {}).items():
+        if s["stale"]:
+            age = "never" if s["age_s"] is None else f"{s['age_s'] // 60}m"
+            warn(f"sidecar '{name}' stale (last run {age}, "
+                 f"cadence {s['cadence_s'] // 60}m)")
+        elif s["failed"]:
+            warn(f"sidecar '{name}' reported failure: {s['last_line'][:90]}")
+
     return tier, reasons
 
 
@@ -358,11 +423,12 @@ def build_status(now: int | None = None, deep: bool = True) -> dict:
 
     candles = candle_freshness() if deep else {}
     latest_candle = candles.get("latest_to_ts")
+    sidecars = sidecar_health(now)  # cheap file reads: included even shallow
 
     tier, reasons = classify_health(
         now=now, heartbeat_ts=hb_ts, task_status=task.get("status"),
         churn_events=churn, latest_candle_ts=latest_candle,
-        supervisor_seen=bool(events),
+        supervisor_seen=bool(events), sidecars=sidecars,
     )
 
     status = {
@@ -389,6 +455,7 @@ def build_status(now: int | None = None, deep: bool = True) -> dict:
             "last_signal": parts["signals"][-1] if parts["signals"] else None,
         },
         "forward_progress": forward_progress(parts["signals"]),
+        "sidecars": sidecars,
         "registered_note": "counts only - verdicts belong to forward_eval.py, run once",
     }
     if deep:

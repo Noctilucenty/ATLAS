@@ -53,7 +53,7 @@ def log(msg: str) -> None:
         fh.write(f"[{stamp}] {msg}\n")
 
 
-def main() -> int:
+def _run() -> int:
     import duckdb
 
     from extra_collect import EXTRA_ACTIVE_IDS
@@ -61,7 +61,17 @@ def main() -> int:
 
     assets = list(INSTRUMENTS) + list(EXTRA_ACTIVE_IDS)
     now = int(time.time())
-    conn = duckdb.connect(str(PROJECT_DIR / "market.duckdb"), read_only=True)
+    # The collector holds market.duckdb's single-writer lock for minutes at
+    # a time, and a read_only open fails hard against it. Losing this run is
+    # fine (the next is 6h away, gaps stay healable for ~60 days); dying
+    # without a trace is not (audit 2026-07-24).
+    try:
+        conn = duckdb.connect(str(PROJECT_DIR / "market.duckdb"),
+                              read_only=True)
+    except Exception as exc:
+        log(f"skipped: market.duckdb busy ({type(exc).__name__}) - "
+            "collector holds the write lock; retrying next cycle")
+        return 0
     try:
         rows = dict(conn.execute(
             """SELECT d.asset, max(c.to_ts)
@@ -84,12 +94,31 @@ def main() -> int:
         constants.ACTIVES.setdefault(key, active_id)
     from collector import collect_candles
 
+    log(f"healing window={hours:.0f}h assets={len(needy)}: "
+        f"{', '.join(needy)}")
     results = collect_candles(needy, 60, hours)
     stored = sum(1 for r in results if "dataset_id" in r)
     failed = [r["asset"] for r in results if "error" in r]
     log(f"healed window={hours:.0f}h assets={len(needy)} stored={stored} "
         f"failed={len(failed)} ({', '.join(failed)})")
-    return 0
+    return 0 if stored else 1
+
+
+def main() -> int:
+    """Exception barrier. collect_candles' preamble is unguarded by design
+    (login raises SystemExit, storage.open_db raises on the write lock), and
+    under pythonw an escaping exception leaves no trace at all - a failed
+    heal would be indistinguishable from a task that never fired."""
+    try:
+        return _run()
+    except BaseException as exc:  # SystemExit from a failed login included
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        try:
+            log(f"FAILED {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+        return 2
 
 
 if __name__ == "__main__":

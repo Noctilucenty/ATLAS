@@ -84,6 +84,12 @@ def main() -> int:
         print(f"  candles={db['candles']:,} (latest {age} ago)  "
               f"payout_snapshots={db['payout_snapshots']} (latest {page} ago)")
 
+    print("\n--- sidecars ---")
+    for name, sc in s.get("sidecars", {}).items():
+        mark = "STALE" if sc["stale"] else ("FAIL" if sc["failed"] else "ok  ")
+        print(f"  [{mark}] {name:14s} last {fmt_age(sc['age_s'])} ago "
+              f"(cadence {sc['cadence_s'] // 60}m)")
+
     fid = s.get("fidelity", {})
     print("\n--- label fidelity (broker verdict vs candle label) ---")
     print(f"  settled orders={fid.get('settled_orders', 0)}/"
