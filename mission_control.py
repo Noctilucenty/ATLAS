@@ -32,6 +32,7 @@ JOURNAL_DB = PROJECT_DIR / "journal.db"
 TASK_NAME = "ATLAS-supervisor"
 
 EXPIRY_S = 15 * 60          # matches live_h2_runner EXPIRY_MINUTES
+HORIZON_BARS = 15           # registered label horizon (FORWARD_TEST.md)
 HEARTBEAT_STALE_S = 600     # runner cycles each minute; 10 min quiet = down
 CANDLE_STALE_S = 9000       # mirrors health_report.STALE_CANDLE_S
 CHURN_WINDOW_S = 600        # repeated runner exits inside 10 min = lock churn
@@ -238,9 +239,13 @@ def candle_freshness() -> dict:
         return {"exists": True, "busy": f"{type(exc).__name__}: {exc}"}
 
 
-def candle_closes(asset: str, ts_list: list[int]) -> dict[int, float]:
-    """{to_ts: close} for the requested bar close-times of one asset,
-    read-only, joined through datasets like storage.load_canonical_history."""
+def candle_ohlc(asset: str, ts_list: list[int]) -> dict[int, tuple[float, float]]:
+    """{to_ts: (open, close)} for the requested bar close-times of one asset,
+    read-only, joined through datasets like storage.load_canonical_history.
+
+    Both fields are needed because the project's registered label uses the
+    NEXT bar's OPEN as the strike and a later bar's CLOSE as the exercise
+    price (features.py: entry_next_open)."""
     if not MARKET_DB.exists() or not ts_list:
         return {}
     try:
@@ -249,7 +254,7 @@ def candle_closes(asset: str, ts_list: list[int]) -> dict[int, float]:
         try:
             placeholders = ",".join("?" for _ in ts_list)
             rows = conn.execute(
-                f"""SELECT c.to_ts, max(c.close)
+                f"""SELECT c.to_ts, max(c.open), max(c.close)
                     FROM candles c JOIN datasets d ON c.dataset_id = d.id
                     WHERE d.asset = ? AND d.interval_seconds = 60
                       AND c.to_ts IN ({placeholders})
@@ -258,7 +263,7 @@ def candle_closes(asset: str, ts_list: list[int]) -> dict[int, float]:
             ).fetchall()
         finally:
             conn.close()
-        return {int(t): float(c) for t, c in rows}
+        return {int(t): (float(o), float(c)) for t, o, c in rows}
     except Exception:
         return {}
 
@@ -280,19 +285,31 @@ def journal_counts() -> dict:
 
 # ------------------------------------------------------------ label fidelity
 
-def _bar_ts(ts: int) -> int:
-    """Close-time of the 1m bar that contains epoch ts."""
-    return (ts // 60) * 60 + 60
+def _label_bars(bar_to_ts: int) -> tuple[int, int]:
+    """(strike bar, exercise bar) close-times for a signal on the bar that
+    closed at bar_to_ts, matching the project's REGISTERED label convention
+    (features.py `_build_features_segment`):
+
+        strike   = open[t+1]              -> the bar closing at t + 60
+        exercise = close[t + horizon]     -> the bar closing at t + 15*60
+
+    Getting this wrong measures our own inconsistency as broker
+    disagreement. The earlier version used close[t] as the strike and
+    derived the exercise bar from the ORDER timestamp (~19 s after the bar
+    closed), which rounded to t + 960 - a full bar late (audit 2026-07-24).
+    """
+    return bar_to_ts + 60, bar_to_ts + HORIZON_BARS * 60
 
 
-def label_fidelity(settled: list[dict], closes_fn=candle_closes) -> dict:
-    """Broker verdict vs candle-approximation label, per settled REAL order.
+def label_fidelity(settled: list[dict], ohlc_fn=candle_ohlc) -> dict:
+    """Broker verdict vs our candle label, per settled REAL order.
 
-    Candle label: entry price = close of the decision bar (bar_to_ts);
-    settlement price = close of the bar ending nearest entry+15 min.
-    call wins if settle > entry, put wins if settle < entry, tie = equal.
-    This is the demo-trial fidelity measurement from CLAUDE.md - agreement
-    rate is the result, and low agreement is a FINDING, not a bug here.
+    Candle label, exactly as the forward test scores it: strike = the OPEN
+    of the bar after the signal, exercise = the CLOSE 15 bars after the
+    signal bar. call wins if exercise > strike, put wins if it fell, equal
+    on a tie. This is the demo-trial fidelity measurement that FORWARD_TEST
+    calls the project's single most important pending number - a low
+    agreement rate is the FINDING, not a bug in this function.
     """
     from instruments import INSTRUMENTS  # data map only, not signal logic
 
@@ -302,12 +319,11 @@ def label_fidelity(settled: list[dict], closes_fn=candle_closes) -> dict:
         spec = INSTRUMENTS.get(asset)
         if spec is None or not r.get("order_id"):
             continue
-        entry_bar = int(r["bar_to_ts"])
-        settle_bar = _bar_ts(int(r["ts"]) + EXPIRY_S)
+        strike_bar, exercise_bar = _label_bars(int(r["bar_to_ts"]))
         per_asset_ts.setdefault(spec.candle_asset, set()).update(
-            (entry_bar, settle_bar))
+            (strike_bar, exercise_bar))
 
-    closes = {a: closes_fn(a, sorted(ts)) for a, ts in per_asset_ts.items()}
+    bars = {a: ohlc_fn(a, sorted(ts)) for a, ts in per_asset_ts.items()}
 
     rows, agree, disagree, undetermined = [], 0, 0, 0
     for r in settled:
@@ -315,10 +331,11 @@ def label_fidelity(settled: list[dict], closes_fn=candle_closes) -> dict:
         spec = INSTRUMENTS.get(asset)
         if spec is None or not r.get("order_id"):
             continue
-        entry_bar = int(r["bar_to_ts"])
-        settle_bar = _bar_ts(int(r["ts"]) + EXPIRY_S)
-        cmap = closes.get(spec.candle_asset, {})
-        entry, settle = cmap.get(entry_bar), cmap.get(settle_bar)
+        strike_bar, exercise_bar = _label_bars(int(r["bar_to_ts"]))
+        cmap = bars.get(spec.candle_asset, {})
+        # strike is an OPEN, exercise is a CLOSE
+        entry = cmap.get(strike_bar, (None, None))[0]
+        settle = cmap.get(exercise_bar, (None, None))[1]
         broker = (r.get("result") or "").lower()
         if entry is None or settle is None:
             candle = None
@@ -349,7 +366,8 @@ def label_fidelity(settled: list[dict], closes_fn=candle_closes) -> dict:
         "undetermined": undetermined,
         "agreement_rate": round(agree / judged, 4) if judged else None,
         "target_trades": 100,
-        "note": "candle label is the MID-settlement approximation; "
+        "note": "candle label uses the REGISTERED convention (strike = next "
+                "bar open, exercise = close 15 bars on) on IQ's mid feed; "
                 "disagreement rate IS the measurement",
     }
 

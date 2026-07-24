@@ -114,24 +114,37 @@ def test_tier_exit_codes():
 
 # ----------------------------------------------------------- label fidelity
 
+def test_label_bars_follow_the_registered_convention():
+    # features.py: strike = open[t+1], exercise = close[t+horizon].
+    strike, exercise = mc._label_bars(600_000)
+    assert strike == 600_060                       # next bar's close-time
+    assert exercise == 600_000 + 15 * 60           # 15 bars, NOT 16
+    # the order timestamp (~19s after the bar) must not shift the exercise bar
+    assert mc._label_bars(600_000)[1] != ((600_019 + mc.EXPIRY_S) // 60) * 60 + 60
+
+
 def test_label_fidelity_agreement_and_disagreement():
-    # Two settled orders on EURUSD spot. Candle closes: entry 1.1000.
-    # Trade A: call, settle 1.1010 (up) -> candle win; broker says win  -> agree
-    # Trade B: call, settle 1.0990 (dn) -> candle loose; broker says win -> disagree
+    # Two settled orders on EURUSD spot. Strike is the NEXT bar's OPEN
+    # (1.1000); exercise is the CLOSE 15 bars after the signal bar.
+    # Trade A: call, exercise 1.1010 (up) -> candle win; broker win  -> agree
+    # Trade B: call, exercise 1.0990 (dn) -> candle loose; broker win -> disagree
     settled = [
-        {"ts": 600_000, "bar_to_ts": 600_000, "asset": "EURUSD",
+        {"ts": 600_019, "bar_to_ts": 600_000, "asset": "EURUSD",
          "action": "binary_call", "order_id": 1, "result": "win", "profit": 0.87},
-        {"ts": 700_000, "bar_to_ts": 700_000, "asset": "EURUSD",
+        {"ts": 700_019, "bar_to_ts": 700_000, "asset": "EURUSD",
          "action": "binary_call", "order_id": 2, "result": "win", "profit": 0.87},
     ]
 
-    def fake_closes(asset, ts_list):
+    def fake_ohlc(asset, ts_list):
         assert asset == "EURUSD"  # candle_asset mapping applied
-        table = {600_000: 1.1000, mc._bar_ts(600_000 + mc.EXPIRY_S): 1.1010,
-                 700_000: 1.1000, mc._bar_ts(700_000 + mc.EXPIRY_S): 1.0990}
+        table = {
+            # (open, close); only the marked field is used per bar
+            600_060: (1.1000, 9.9), 600_000 + 15 * 60: (9.9, 1.1010),
+            700_060: (1.1000, 9.9), 700_000 + 15 * 60: (9.9, 1.0990),
+        }
         return {t: table[t] for t in ts_list if t in table}
 
-    out = mc.label_fidelity(settled, closes_fn=fake_closes)
+    out = mc.label_fidelity(settled, ohlc_fn=fake_ohlc)
     assert out["settled_orders"] == 2
     assert out["judged"] == 2
     assert out["agree"] == 1 and out["disagree"] == 1
@@ -139,10 +152,10 @@ def test_label_fidelity_agreement_and_disagreement():
 
 
 def test_label_fidelity_missing_candles_are_undetermined():
-    settled = [{"ts": 600_000, "bar_to_ts": 600_000, "asset": "EURUSD",
+    settled = [{"ts": 600_019, "bar_to_ts": 600_000, "asset": "EURUSD",
                 "action": "binary_put", "order_id": 3, "result": "loose",
                 "profit": -1.0}]
-    out = mc.label_fidelity(settled, closes_fn=lambda a, ts: {})
+    out = mc.label_fidelity(settled, ohlc_fn=lambda a, ts: {})
     assert out["undetermined"] == 1
     assert out["judged"] == 0
     assert out["agreement_rate"] is None
