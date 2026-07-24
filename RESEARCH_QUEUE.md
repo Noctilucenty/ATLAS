@@ -42,6 +42,11 @@ chasing it without the discipline is how the 47%-OTC blind spot happened.
 7. **Second-broker portability probe** - engineering only: how much of
    collector/runner survives against another broker's API (defends against
    single-broker risk). No trading until its own registered test.
+8. **Broker ToS / automation policy review** (2026-07-24 audit item) - IQ
+   Option's terms restrict automation on REAL accounts; brokers void
+   winnings retroactively. MUST be answered before IQ_ALLOW_REAL is ever
+   reconsidered - a policy question, not a code question. Until then the
+   flag stays 0 and this is moot for the demo trial.
 
 ## Standing constraints
 
