@@ -13,7 +13,6 @@ outcomes are scored later against collected candles. Run bounded with
 """
 
 import argparse
-import fcntl
 import json
 import os
 import pickle
@@ -36,6 +35,7 @@ CANDLE_COUNT = 560  # covers REGIME_WINDOW=480 warmup plus slack
 EV_MARGIN = 0.03    # FORWARD_TEST.md hypothesis #2 primary gate - do not tune
 EXPIRY_MINUTES = 15
 TRADE_AMOUNT = 1.0
+_LOCK_SOCK = None  # single-instance lock socket, bound in main()
 
 
 def _call(fn, *args, timeout=60, **kwargs):
@@ -210,17 +210,19 @@ def main() -> int:
     args = parser.parse_args()
 
     _load_env()
-    # Single-instance lock: launchd never doubles a label, but a terminal
-    # run_paper_loop plus the hook's kickstart could produce two runners
-    # double-writing the signal log and double-placing orders (audit H2/H3).
-    lock_file = open(PROJECT_DIR / "logs" / ".runner.lock", "w")
+    # Single-instance lock (portable: macOS/Windows/Linux). A localhost
+    # socket bind is held for the process lifetime and released by the OS on
+    # exit or crash - no fcntl (Unix-only) and no stale lockfile. Prevents
+    # two runners double-writing the signal log and double-placing orders.
+    import socket
+
+    global _LOCK_SOCK
+    _LOCK_SOCK = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        _LOCK_SOCK.bind(("127.0.0.1", 47201))
+    except OSError:
         print("another runner instance holds the lock - exiting cleanly", flush=True)
         return 0
-    lock_file.write(str(os.getpid()))
-    lock_file.flush()
 
     from iqoptionapi.stable_api import IQ_Option
 

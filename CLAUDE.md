@@ -61,4 +61,8 @@ against live payouts. Demo (PRACTICE) only; `IQ_ALLOW_REAL=0` stays 0.
   (`instruments.py`); `get_all_open_time` broken (freshness proxy);
   server reads .env at start only; payout-quoted ≠ candle-fetchable;
   binary payouts > turbo; USDCHF spot = data-only (no option market).
+- Cross-platform: `supervisor.py` (portable collector+trader in one process,
+  socket single-instance lock) replaces launchd/zsh; see WINDOWS_SETUP.md for
+  the always-on Windows host. ONE machine per account (two --trade runners on
+  one demo account double-place + risk broker flags).
 - Tests: `.venv/bin/python -m pytest -q` (133) — run before every commit.
