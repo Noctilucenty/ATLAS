@@ -194,7 +194,16 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
     )
     pooled = add_cross_asset(pooled)
     forward = pooled[pooled["to_ts"] > cutoff_ts].reset_index(drop=True)
-    print(f"[candles] model={model_name} forward rows={len(forward)} "
+    # VERDICT UNIVERSE FREEZE (pre-verdict correction, 2026-07-24): the
+    # registered hypotheses are evaluated on the instrument set the frozen
+    # model was trained on. Instruments registered AFTER the cutoff (for
+    # demo-trial volume) must not silently widen the evaluation universe
+    # mid-window; they appear only in the reported expanded block.
+    frozen_assets = set(meta["assets"])
+    expanded = forward[~forward["asset"].isin(frozen_assets)]
+    forward = forward[forward["asset"].isin(frozen_assets)].reset_index(drop=True)
+    print(f"[candles] model={model_name} frozen-universe rows={len(forward)} "
+          f"(+{len(expanded)} rows from post-registration instruments, reported only) "
           f"(cutoff {datetime.fromtimestamp(cutoff_ts, timezone.utc).isoformat()})",
           flush=True)
     if forward.empty:

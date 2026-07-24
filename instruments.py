@@ -239,6 +239,89 @@ INSTRUMENTS: dict[str, InstrumentSpec] = {
         option_kind="turbo",
         expiry_minutes=1,
     ),
+    # Batch 4, verified live 2026-07-24: candle fetch tested per asset. All
+    # ten crosses quote BINARY-only option markets (<PAIR>-op); XAUUSD has
+    # both kinds (binary payout higher). Registered post-forward-cutoff:
+    # these feed the demo execution trial and reported metrics only - the
+    # frozen forward-test verdict universe excludes them by construction
+    # (forward_eval restricts to the model bundle's trained asset list).
+    "AUDNZD": InstrumentSpec(
+        candle_asset="AUDNZD",
+        quote_key="AUDNZD-op",
+        order_active="AUDNZD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "EURNZD": InstrumentSpec(
+        candle_asset="EURNZD",
+        quote_key="EURNZD-op",
+        order_active="EURNZD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "GBPNZD": InstrumentSpec(
+        candle_asset="GBPNZD",
+        quote_key="GBPNZD-op",
+        order_active="GBPNZD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "NZDJPY": InstrumentSpec(
+        candle_asset="NZDJPY",
+        quote_key="NZDJPY-op",
+        order_active="NZDJPY",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "NZDCAD": InstrumentSpec(
+        candle_asset="NZDCAD",
+        quote_key="NZDCAD-op",
+        order_active="NZDCAD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "CADCHF": InstrumentSpec(
+        candle_asset="CADCHF",
+        quote_key="CADCHF-op",
+        order_active="CADCHF",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "AUDCHF": InstrumentSpec(
+        candle_asset="AUDCHF",
+        quote_key="AUDCHF-op",
+        order_active="AUDCHF",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "CHFJPY": InstrumentSpec(
+        candle_asset="CHFJPY",
+        quote_key="CHFJPY-op",
+        order_active="CHFJPY",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "EURCAD": InstrumentSpec(
+        candle_asset="EURCAD",
+        quote_key="EURCAD-op",
+        order_active="EURCAD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "GBPCAD": InstrumentSpec(
+        candle_asset="GBPCAD",
+        quote_key="GBPCAD-op",
+        order_active="GBPCAD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
+    "XAUUSD": InstrumentSpec(
+        candle_asset="XAUUSD",
+        quote_key="XAUUSD-op",
+        order_active="XAUUSD",
+        option_kind="binary",
+        expiry_minutes=1,
+    ),
 }
 
 

@@ -110,8 +110,8 @@ def test_otc_spec_is_fully_self_keyed():
 def test_unknown_instrument_raises_with_known_list():
     import pytest
 
-    with pytest.raises(KeyError, match="XAUUSD"):
-        get_instrument("XAUUSD")   # deliberately unregistered
+    with pytest.raises(KeyError, match="NOSUCHPAIR"):
+        get_instrument("NOSUCHPAIR")   # can never be registered
     assert "EURUSD" in INSTRUMENTS
 
 
