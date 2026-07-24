@@ -26,16 +26,17 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 LOG = PROJECT_DIR / "logs" / "extra_collect.log"
 
-# Server-confirmed active ids missing from the vendored constants.
+# Server-confirmed active ids (the vendored constants predate some).
+# NOTE 2026-07-24: the real-feed index actives (USSPX500/US30/USNDAQ100/
+# UK100) are DEAD - their last candle is ~Mar 2025 (probed live; ages
+# ~480 days). IQ's living index products are the OTC synthetics below.
 EXTRA_ACTIVE_IDS = {
-    "SpaceX-OTC": 2443,   # broker-synthetic 24/7 (OTC-like pricing)
-    "SpaceX-op": 2444,    # broker-synthetic, quoted hours
-    "SP500-OTC": 1971,    # broker-synthetic S&P variant
-    # Already in vendored constants, listed for completeness/collection:
-    "USSPX500": 1239,     # real S&P 500 feed, US hours
-    "US30": 1235,         # Dow
-    "USNDAQ100": 1236,    # Nasdaq 100
-    "UK100": 1241,        # FTSE 100
+    "SpaceX-OTC": 2443,     # broker-synthetic 24/7
+    "SpaceX-op": 2444,      # broker-synthetic, quoted hours
+    "SP500-OTC": 1971,      # synthetic S&P
+    "US30-OTC": 1973,       # synthetic Dow
+    "USNDAQ100-OTC": 1972,  # synthetic Nasdaq 100
+    "UK100-OTC": 2047,      # synthetic FTSE 100
 }
 LOOKBACK_HOURS = 4.0  # self-heals a missed cycle
 
