@@ -98,6 +98,24 @@ The result is a system that **abstains most of the time** — roughly 6 signals/
 | `atlas_hook.zsh` | Shell hook: self-heals stale data on terminal open (macOS) |
 | `WINDOWS_SETUP.md` | Step-by-step Windows setup: uv, deps, scheduled task for always-on operation |
 
+### Operations — Windows host (Mission Control, 2026-07-24)
+The live trading host runs five self-maintaining jobs (Task Scheduler),
+all read-only against the research state:
+
+| Job / file | Cadence | Role |
+|---|---|---|
+| `ATLAS-supervisor` → `supervisor.py` | always-on (S4U, at logon) | hourly collect + demo-trade runner |
+| `ATLAS-watchdog` → `watchdog.py` | 15 min | health tiers, toast on CRITICAL, self-heals the dashboard |
+| `ATLAS-extra-collect` → `extra_collect.py` | hourly | banks the post-verdict candidate universe (SpaceX, synthetic indices) |
+| `ATLAS-catchup` → `catchup_gaps.py` | 6 h | heals collection holes beyond the supervisor's 2 h reach |
+| dashboard → `dashboard.py` | always-on via watchdog | live Mission Control at `127.0.0.1:8787` |
+
+Plus on demand: `status.py` (terminal status, exit code = health tier),
+`settle_missing.py` (recover broker verdicts for orphaned orders),
+`research_payout_landscape.py` / `research_universe_profile.py`
+(descriptive ROI groundwork; JSON outputs under `logs/`).
+Shared read-only core: `mission_control.py`.
+
 ---
 
 ## Setup
