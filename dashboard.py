@@ -206,6 +206,7 @@ td.dim { color:var(--dim); } .call { color:var(--green); } .put { color:var(--re
   <div class="card"><h2><span class="idx">06</span>Equity<span class="sub">settled demo $</span></h2><canvas id="equity"></canvas></div>
   <div class="card"><h2><span class="idx">07</span>Win Rate · Asset</h2><canvas id="wr"></canvas></div>
   <div class="card"><h2><span class="idx">08</span>Live Payouts</h2><canvas id="pay"></canvas></div>
+  <div class="card"><h2><span class="idx">8b</span>Break-even WR<span class="sub">line = 57% calibrated floor</span></h2><canvas id="roi"></canvas></div>
   <div class="card w12"><h2><span class="idx">09</span>Signal Ledger<span class="sub">latest 25</span></h2>
     <table id="recent"><thead><tr><th>time utc</th><th>asset</th><th>side</th>
     <th>p_up</th><th>meta_p</th><th>ev</th><th>payout</th><th>mode</th><th>order</th></tr></thead>
@@ -277,15 +278,18 @@ function line(id, pts, color, fmt){ chart(id,(ctx,w,h)=>{ frame(ctx,w,h);
   ctx.fillText(utc(x0), 36, h-8); ctx.textAlign="right";
   ctx.fillText(utc(x1), w-6, h-8); ctx.textAlign="left"; }); }
 
-function bars(id, labels, values, color, fmt){ chart(id,(ctx,w,h)=>{ frame(ctx,w,h);
+function bars(id, labels, values, color, fmt, refline){ chart(id,(ctx,w,h)=>{ frame(ctx,w,h);
   if(!values.length){ noData(ctx,w,h); return; }
-  const y1=Math.max(...values)||1, n=values.length,
+  const y1=Math.max(...values, refline||0)||1, n=values.length,
         slot=(w-44)/n, bw=Math.max(2, slot-3);
   values.forEach((v,i)=>{ const x=36+i*slot, bh=(h-30)*v/y1;
     const g=ctx.createLinearGradient(0,h-22-bh,0,h-22);
     g.addColorStop(0,color); g.addColorStop(1,color+"55");
     ctx.fillStyle=g; ctx.fillRect(x,h-22-bh,bw,bh);
     if(bh>2){ ctx.fillStyle="#fff3"; ctx.fillRect(x,h-22-bh,bw,1); } });
+  if(refline){ const ry=h-22-(h-30)*refline/y1;
+    ctx.strokeStyle=GREEN; ctx.setLineDash([4,3]); ctx.beginPath();
+    ctx.moveTo(34,ry); ctx.lineTo(w-6,ry); ctx.stroke(); ctx.setLineDash([]); }
   ctx.fillStyle=DIM; ctx.font=MONO;
   ctx.fillText((fmt||(v=>v))(y1), 2, 14);
   const step=Math.ceil(n/8);
@@ -347,6 +351,13 @@ async function refresh(){
 
   const pays=(d.payouts||[]).slice(0,18);
   bars("pay", pays.map(p=>p.asset), pays.map(p=>100*p.payout), AMBER2, v=>v.toFixed(0)+"%");
+
+  // ROI lever: break-even WR per trial-universe asset vs the 57% calibrated
+  // floor - the gap between bar top and the dashed line is the edge margin.
+  const trial=(d.payouts||[]).filter(p=>p.kind==="binary" && p.asset.endsWith("-op"))
+    .map(p=>({a:p.asset.replace("-op",""), be:100/(1+p.payout)}))
+    .sort((x,y)=>x.be-y.be).slice(0,18);
+  bars("roi", trial.map(t=>t.a), trial.map(t=>t.be), RED, v=>v.toFixed(1)+"%", 57);
 
   const rows = d.signals.slice(-25).reverse();
   el("recent").querySelector("tbody").innerHTML = rows.length ? rows
