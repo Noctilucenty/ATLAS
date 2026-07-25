@@ -63,7 +63,14 @@ H3_META_THRESHOLD = 0.60          # original H3 primary
 # REPORTED without verdicts. Family-wise error stays at the claimed 5%.
 H3_META_THRESHOLDS = (0.60, 0.65, 0.70, 0.775)
 REGISTERED_VERDICT_KEYS = {"h2_primary", "h2_secondary", "h3_meta60", "h4"}
-MIN_CLUSTERS_CANDLES = 30
+# FORWARD_TEST.md registers ">= 20 clusters" for H2 primary, H2 secondary,
+# H3 and H4. The >= 30 in its Protocol section belongs to the older H1. This
+# file previously applied 30 to the candles track, i.e. it was STRICTER than
+# the registration and could have failed a hypothesis the registration says
+# passes. Corrected to the registered value pre-verdict (audit 2026-07-25):
+# the target value was fixed by the registration before any data existed, so
+# the correction cannot be shaped by a result.
+MIN_CLUSTERS_CANDLES = 20
 MIN_CLUSTERS_PAPER = 20
 
 
@@ -226,9 +233,21 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa:
     def observed_payout(asset: str, ts: int) -> float:
         """Causal payout at signal time from real snapshots; the registered
         criterion is break-even 'at the payout actually observed', so the
-        assumed fallback applies only where no fresh snapshot exists."""
+        assumed fallback applies only where no fresh snapshot exists.
+
+        BINARY FIRST (audit 2026-07-25). The frozen configuration specifies
+        the "binary-kind payout" and the contract actually traded is a
+        15-minute BINARY - live_h2_runner resolves payouts binary-first for
+        exactly that reason. This previously read spec.option_kind, which is
+        'turbo' for 24 of the tradable instruments; measured on collected
+        snapshots the binary quote pays +0.0223 more, moving break-even from
+        0.5412 to the registered 0.5348. Mirrors the runner's precedence so
+        the evaluator and the executor price the same contract."""
         spec = INSTRUMENTS[asset]
-        p = latest_payout_before(conn, spec.quote_key, spec.option_kind, ts, 7200)
+        p = latest_payout_before(conn, spec.quote_key, "binary", ts, 7200)
+        if p is None and spec.option_kind != "binary":
+            p = latest_payout_before(conn, spec.quote_key, spec.option_kind,
+                                     ts, 7200)
         return float(p) if p is not None else payout_fallback
 
     for label, margin in (("h2_primary", H2_PRIMARY_MARGIN),
@@ -301,6 +320,24 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa:
     return out
 
 
+def _frozen_assets() -> set[str]:
+    """The instruments the deployed H2 bundle was trained on, from its own
+    meta['assets']. Empty set if unavailable (then no filter is applied and
+    the report says so).
+
+    pickle note: this module already unpickles these same bundles to score
+    them (load_bundle); they are the project's own frozen artifacts, not
+    third-party input."""
+    try:
+        paths = sorted((PROJECT_DIR / "models").glob("h2-*.pkl"))
+        if not paths:
+            return set()
+        with open(paths[-1], "rb") as fh:
+            return set(pickle.load(fh).get("meta", {}).get("assets") or [])
+    except Exception:
+        return set()
+
+
 def paper_track(horizon: int) -> dict:
     """Score live paper signals against collected candles. Signals were
     emitted before their outcomes existed - no hindsight is possible."""
@@ -311,6 +348,20 @@ def paper_track(horizon: int) -> dict:
     signals = [s for s in signals if not s.get("settled")]
     if not signals:
         return {"error": "paper log is empty"}
+
+    # FROZEN UNIVERSE (audit 2026-07-25). candles_track scores only the
+    # registered instruments and reports post-registration ones separately;
+    # paper_track applied no such filter, so its REGISTERED verdicts would
+    # have included instruments the frozen model was never trained on. The
+    # universe is read from the deployed bundle's own meta['assets'], so the
+    # boundary is defined by the artifact, not by a choice made here.
+    universe = _frozen_assets()
+    expanded = [s for s in signals if s.get("asset") not in universe] if universe else []
+    if universe:
+        signals = [s for s in signals if s.get("asset") in universe]
+    if not signals:
+        return {"error": "no paper signals inside the frozen universe",
+                "out_of_universe_signals": len(expanded)}
 
     # Score outcomes DIRECTLY from raw candles: a signal at bar_to_ts enters
     # at the next bar's open and exercises at the close of the bar ending
@@ -336,7 +387,9 @@ def paper_track(horizon: int) -> dict:
             labels[(asset, ts)] = float(exercise > entry)
 
     purge_s = horizon * 60
-    out = {"paper_signals": len(signals)}
+    out = {"paper_signals": len(signals),
+           "frozen_universe_size": len(universe),
+           "out_of_universe_signals_excluded": len(expanded)}
     keeps = [("h2_primary", lambda s: True)]
     for thr in H3_META_THRESHOLDS:
         keeps.append((f"h3_meta{int(thr * 100)}",

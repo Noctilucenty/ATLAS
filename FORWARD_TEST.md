@@ -479,6 +479,71 @@ CHANGES ACTUALLY MADE (criteria-neutral, ergonomics only):
 - A candles-track SystemExit no longer takes the leak-immune paper track
   down with it; the failure is reported inside the JSON report instead.
 
+## JUDGE PANEL + EVALUATOR CORRECTIONS (2026-07-25, before ANY verdict run)
+
+A four-lens independent panel (statistical integrity / adversarial referee /
+practical outcome / process precedent) reviewed the decisions above. All four
+returned HIGH confidence and all four REJECTED the earlier framing that "both
+defects make passing easier, so they are the operator's call". Their argument,
+adopted here:
+
+  Direction of effect is the wrong test. Repairing only the errors that hurt
+  you is itself a bias - the mirror image of p-hacking. The correct test is
+  whether the CODE CONTRADICTS THE REGISTRATION. Fix mismatches; never edit
+  the registration. Each target value below was fixed by an artifact that
+  already existed before any forward data, so no fix can be shaped by a
+  result - which is the only property that makes a pre-verdict correction
+  legitimate. After 2026-08-05 this door is permanently closed.
+
+CORRECTIONS APPLIED (criteria intent unchanged; registration untouched):
+1. MIN_CLUSTERS_CANDLES 30 -> 20. H2/H2-sec/H3/H4 are registered at ">= 20
+   clusters"; the >= 30 in the Protocol section belongs to the older H1. The
+   code was STRICTER than the registration and could have failed a hypothesis
+   the registration passes.
+2. observed_payout now resolves the BINARY payout first, mirroring
+   live_h2_runner's precedence, because the contract traded is a 15-minute
+   binary and the frozen config specifies "binary-kind payout". It had read
+   spec.option_kind, which is 'turbo' for 24 tradable instruments (+0.0223
+   payout, break-even 0.5412 as coded vs 0.5348 as registered).
+3. paper_track now applies the frozen-universe filter that candles_track
+   already applied, reading meta['assets'] from the deployed bundle, and
+   reports how many out-of-universe signals were excluded. Its registered
+   verdicts previously included post-registration instruments.
+4. BLOCKING BUG, found by the panel and fixed: forward_eval wrote to
+   sys.stderr without importing sys. meta-h3.pkl has no data_end_ts, so that
+   warning branch runs on EVERY invocation - a NameError that main() did not
+   catch, which would have killed BOTH tracks under every option, printing no
+   JSON at all. main() now contains any candles-track exception so a failure
+   there can never take the leak-immune paper track down with it.
+   tests/test_forward_eval_guards.py pins the path and closes the class with a
+   pylint undefined-name sweep over 13 operational modules.
+
+PANEL FINDINGS RECORDED BUT NOT ACTED ON (operator's call):
+- Three of four judges prefer a PER-MODEL horizon purge over a single moved
+  cutoff: because labels look 15 bars forward, a model whose data ends at
+  05:04Z has absorbed prices through 05:19Z. So the correct exclusion is each
+  bundle's data_end_ts PLUS one horizon - 2026-07-22T05:19Z for H2/H2-sec/H3
+  and 17:47Z for H4 - not the single 17:32Z proposed earlier, which is both
+  insufficient (by one horizon) and needlessly discards 12.5h that is valid
+  for H2/H3. Derived from the artifacts, it contains no outcome-informed
+  degree of freedom and structurally prevents scoring any model on its own
+  training labels.
+- POWER, not contamination, may dominate: MinTRL in this document requires
+  39-163 independent trades, while measured accrual projects roughly 20-25
+  clusters (paper) and 10-15 (candles) by 2026-08-05. If that holds, H3 is
+  underpowered against its own 57-65% central expectation, the contamination
+  choice cannot change the verdict, and "a fail closes this hypothesis" would
+  be indefensible. Recommended: annotate every verdict with the MinTRL
+  comparison, and pre-commit any window extension NOW, blind, since extending
+  after seeing results is optional stopping.
+- meta-h3's missing data_end_ts is a schema gap, not an evidentiary one: its
+  corpus (histdata 2016-2025 spot) is disjoint from 2026 broker candles by
+  construction. The real H3 risk is TRANSFER (spot-trained meta applied to OTC
+  instruments measured at 47.1%), which is already documented.
+- 11 of the 20 logged signals predate the cross-asset basket repair, so
+  applying post-repair features AND the frozen universe AND meta_p >= 0.60
+  simultaneously may leave no usable H3 signals in the current sample.
+
 OPEN DECISIONS (owner: operator):
 1. The contaminated models. Options considered: (a) move the registered
    cutoff to 2026-07-22T17:32Z - excludes every contaminated hour, touches
