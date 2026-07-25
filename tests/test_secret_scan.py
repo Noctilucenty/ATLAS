@@ -14,13 +14,18 @@ def _match(text: str):
     return [name for name, pattern in SECRET_PATTERNS if pattern.search(text)]
 
 
+# Every fixture is CONSTRUCTED rather than written as a literal, so this file
+# does not itself contain a matchable credential shape. That matters: the scan
+# runs over all tracked files including this one, and the alternative - an
+# exclusion list - could later hide a real key. (The scanner caught exactly
+# this on its first live run, which is the behaviour we want.)
 @pytest.mark.parametrize("sample,expected", [
     ("pplx-" + "A" * 40, "Perplexity API key"),
     ("sk-" + "b" * 40, "OpenAI API key"),
     ("AKIA" + "A" * 16, "AWS access key"),
     ("ghp_" + "c" * 36, "GitHub token"),
     ("xoxb-" + "1234567890-abcdef", "Slack token"),
-    ("-----BEGIN RSA PRIVATE KEY-----", "private key block"),
+    ("-----BEGIN RSA " + "PRIVATE KEY-----", "private key block"),
 ])
 def test_detects_credential_shapes(sample, expected):
     assert expected in _match(f"config = '{sample}'")
