@@ -617,10 +617,17 @@ PANEL FINDINGS RECORDED BUT NOT ACTED ON (operator's call):
   be indefensible. Recommended: annotate every verdict with the MinTRL
   comparison, and pre-commit any window extension NOW, blind, since extending
   after seeing results is optional stopping.
-- meta-h3's missing data_end_ts is a schema gap, not an evidentiary one: its
-  corpus (histdata 2016-2025 spot) is disjoint from 2026 broker candles by
-  construction. The real H3 risk is TRANSFER (spot-trained meta applied to OTC
-  instruments measured at 47.1%), which is already documented.
+- meta-h3's missing data_end_ts is a schema gap, not an evidentiary one -
+  VERIFIED 2026-07-25 by reading the bundle: it records
+  trained_on = "histdata 2016-2025 gated trades", n_trades = 55,856,
+  pairs = [EURUSD, GBPUSD, USDJPY]. That corpus is a DIFFERENT SOURCE ending a
+  year before the 2026-07-22 cutoff, so no mechanism exists by which it could
+  have seen the forward window; and being a monotone filter on H2's p_up it
+  cannot inject forward information H2 did not already carry. The automated
+  guard still cannot check it (no data_end_ts) and still says so; selfcheck
+  reports the corpus instead of implying an unassessed risk. The real H3 risk
+  is TRANSFER - a spot-trained meta applied to OTC instruments measured at
+  47.1% - which is already documented.
 - 11 of the 20 logged signals predate the cross-asset basket repair, so
   applying post-repair features AND the frozen universe AND meta_p >= 0.60
   simultaneously may leave no usable H3 signals in the current sample.

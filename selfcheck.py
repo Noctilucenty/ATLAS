@@ -129,8 +129,23 @@ def check_models(rep: Report) -> None:
             continue
         end = meta.get("data_end_ts")
         if end is None:
-            rep.warn(f"model {path.name}",
-                     f"sha {digest}, NO data_end_ts (provenance unverifiable)")
+            # No data_end_ts, but the bundle may still document its corpus.
+            # meta-h3 records trained_on='histdata 2016-2025 gated trades' -
+            # a different SOURCE ending a year before the 2026 cutoff, so no
+            # mechanism exists for it to have seen the forward window. That is
+            # a schema gap, not an evidentiary one; report it rather than
+            # implying an unassessed risk.
+            trained_on = meta.get("trained_on")
+            if trained_on:
+                pairs = meta.get("pairs") or []
+                rep.ok(f"model {path.name}",
+                       f"sha {digest}, no data_end_ts; corpus: {trained_on}"
+                       + (f" ({len(pairs)} pairs, "
+                          f"{meta.get('n_trades', '?')} trades)" if pairs else ""))
+            else:
+                rep.warn(f"model {path.name}",
+                         f"sha {digest}, NO data_end_ts and no corpus record "
+                         "- provenance genuinely unverifiable")
         elif end > cutoff:
             # No longer a refusal: forward_eval purges each bundle to
             # data_end_ts + one label horizon instead, which is tighter.
