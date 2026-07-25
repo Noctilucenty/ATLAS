@@ -154,6 +154,17 @@ def format_search(payload: dict) -> str:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252, and research answers routinely
+    # contain en-dashes, Unicode minus signs and non-Latin source titles. A
+    # single unencodable character used to crash the print AFTER a multi-minute
+    # (billed) deep-research call had already succeeded, losing the whole
+    # result. Never let formatting discard a completed answer.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("query", nargs="*", help="search query")
     ap.add_argument("--agent", action="store_true",
@@ -169,6 +180,9 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="raw JSON output")
     ap.add_argument("--check", action="store_true",
                     help="report whether a key is configured, without using it")
+    ap.add_argument("--out", default=None,
+                    help="also write the raw JSON here (utf-8), so a costly "
+                         "answer survives any later formatting problem")
     args = ap.parse_args()
 
     key = load_key()
@@ -192,8 +206,14 @@ def main() -> int:
     preset = FAST_PRESET if args.fast else args.preset
     payload = (ask(q, key, preset=preset, model=args.model) if args.agent
                else search(q, key, args.max_results))
+    # Persist BEFORE formatting: the raw answer is the expensive artefact and
+    # must not depend on the pretty-printer succeeding.
+    if args.out:
+        Path(args.out).write_text(json.dumps(payload, indent=2,
+                                             ensure_ascii=False),
+                                  encoding="utf-8")
     if args.json:
-        print(json.dumps(payload, indent=2))
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(format_agent(payload) if args.agent else format_search(payload))
     return 0
