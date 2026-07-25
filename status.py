@@ -84,6 +84,16 @@ def main() -> int:
         print(f"  candles={db['candles']:,} (latest {age} ago)  "
               f"payout_snapshots={db['payout_snapshots']} (latest {page} ago)")
 
+    u = s.get("universe") or {}
+    if u.get("universe_size"):
+        print(f"\n--- signal universe (frozen basket = {u['universe_size']}) ---")
+        print(f"  in-universe={u['in_universe']}  out-of-universe="
+              f"{u['out_of_universe']}"
+              + (f" ({u['out_share']:.0%})" if u.get("out_share") else ""))
+        if u.get("out_by_asset"):
+            print("  outside: " + ", ".join(f"{a}({n})"
+                                            for a, n in u["out_by_asset"].items()))
+
     print("\n--- sidecars ---")
     for name, sc in s.get("sidecars", {}).items():
         mark = "STALE" if sc["stale"] else ("FAIL" if sc["failed"] else "ok  ")

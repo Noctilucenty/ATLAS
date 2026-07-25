@@ -100,6 +100,49 @@ def expected_value(p_up: float, payout: float) -> float:
     return max(call_ev, put_ev)
 
 
+def frozen_universe() -> set[str]:
+    """The instruments the deployed H2 bundle was actually trained on
+    (bundle meta['assets']). Signals on anything else are scored by a model
+    that never saw that market, and the registered candles verdict filters
+    them out - so their win rate must never be blended into the deployed
+    universe's (audit 2026-07-24)."""
+    try:
+        import pickle
+        paths = sorted((PROJECT_DIR / "models").glob("h2-*.pkl"))
+        if not paths:
+            return set()
+        # Project's own frozen bundle - the live runner unpickles it hourly.
+        with open(paths[-1], "rb") as fh:
+            bundle = pickle.load(fh)
+        return set(bundle.get("meta", {}).get("assets") or [])
+    except Exception:
+        return set()
+
+
+def universe_split(signals: list[dict], universe: set[str] | None = None) -> dict:
+    """How many signals fall inside vs outside the frozen training universe.
+    Descriptive only."""
+    universe = frozen_universe() if universe is None else universe
+    if not universe:
+        return {"universe_size": 0, "note": "frozen universe unavailable"}
+    inside = [s for s in signals if s.get("asset") in universe]
+    outside = [s for s in signals if s.get("asset") not in universe]
+    by_asset_out = {}
+    for s in outside:
+        by_asset_out[s["asset"]] = by_asset_out.get(s["asset"], 0) + 1
+    return {
+        "universe_size": len(universe),
+        "in_universe": len(inside),
+        "out_of_universe": len(outside),
+        "out_share": round(len(outside) / len(signals), 4) if signals else None,
+        "out_by_asset": dict(sorted(by_asset_out.items(),
+                                    key=lambda kv: -kv[1])),
+        "note": "out-of-universe signals are paper-logged and reported, but "
+                "the model has no validated edge there and the registered "
+                "candles verdict excludes them",
+    }
+
+
 def forward_progress(signals: list[dict]) -> dict:
     """Trade COUNTS toward each pre-registered hypothesis. Display only -
     win rates for the verdict set are forward_eval.py's job, exactly once."""
@@ -477,6 +520,7 @@ def build_status(now: int | None = None, deep: bool = True) -> dict:
             "last_signal": parts["signals"][-1] if parts["signals"] else None,
         },
         "forward_progress": forward_progress(parts["signals"]),
+        "universe": universe_split(parts["signals"]) if deep else {},
         "sidecars": sidecars,
         "registered_note": "counts only - verdicts belong to forward_eval.py, run once",
     }
