@@ -61,13 +61,34 @@ def test_paper_track_filters_to_the_frozen_universe():
 
 
 def test_verdict_requires_both_beating_breakeven_and_significance():
-    beats_and_sig = {"clusters": 25, "cluster_win_frac": 0.60,
-                     "breakeven": 0.5348, "p_one_sided": 0.001}
-    assert fe.verdict(beats_and_sig, 20) == "PASS"
-    # significant but below break-even -> FAIL
-    assert fe.verdict({**beats_and_sig, "cluster_win_frac": 0.50}, 20) == "FAIL"
+    # 'independent' at/above MinTRL so the power rule does not intervene
+    powered = {"clusters": 25, "cluster_win_frac": 0.60, "breakeven": 0.5348,
+               "p_one_sided": 0.001, "independent": 200}
+    assert fe.verdict(powered, 20) == "PASS"
+    # significant but below break-even -> FAIL (the window could detect it)
+    assert fe.verdict({**powered, "cluster_win_frac": 0.50}, 20) == "FAIL"
     # beats break-even but not significant at the Bonferroni alpha -> FAIL
-    assert fe.verdict({**beats_and_sig, "p_one_sided": 0.02}, 20) == "FAIL"
+    assert fe.verdict({**powered, "p_one_sided": 0.02}, 20) == "FAIL"
     # too few clusters -> INCONCLUSIVE, never FAIL
-    assert "INCONCLUSIVE" in fe.verdict({**beats_and_sig, "clusters": 19}, 20)
+    assert "INCONCLUSIVE" in fe.verdict({**powered, "clusters": 19}, 20)
     assert "INCONCLUSIVE" in fe.verdict({"clusters": 0}, 20)
+
+
+def test_a_fail_below_mintrl_is_reported_as_underpowered_not_refutation():
+    """PRE-COMMITTED POWER RULE 1: below MinTRL a losing result cannot
+    distinguish 'no edge' from 'not enough data', so it must not read as
+    refutation. A PASS is unaffected - it still requires what was registered."""
+    underpowered = {"clusters": 22, "cluster_win_frac": 0.50,
+                    "breakeven": 0.5348, "p_one_sided": 0.40,
+                    "independent": 30}
+    out = fe.verdict(underpowered, 20)
+    assert "UNDERPOWERED" in out and "not refutation" in out
+    assert out != "FAIL"
+
+    # the same shortfall must NOT downgrade a genuine PASS
+    passing = {**underpowered, "cluster_win_frac": 0.70, "p_one_sided": 0.001}
+    assert fe.verdict(passing, 20) == "PASS"
+
+
+def test_mintrl_anchor_matches_the_registered_table():
+    assert fe.MINTRL_AT_62 == 163

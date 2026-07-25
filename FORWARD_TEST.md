@@ -479,6 +479,52 @@ CHANGES ACTUALLY MADE (criteria-neutral, ergonomics only):
 - A candles-track SystemExit no longer takes the leak-immune paper track
   down with it; the failure is reported inside the JSON report instead.
 
+## PRE-COMMITTED POWER RULE (registered 2026-07-25, BLIND - no verdict has been run)
+
+Registered now, before any forward result exists, because deciding it after
+seeing results would be optional stopping and would destroy the alpha this
+document claims. Nothing below changes a gate, a threshold, or ALPHA.
+
+MOTIVATION. This document's own MinTRL table requires 163 independent trades
+at a true 62% win rate, 72 at 66%, 39 at 70%; and its least-contaminated
+estimate (the 2003-2015 era holdout) says to anchor expectations at 57-65%.
+Measured accrual over the first 3 days projects roughly 20-25 clusters on the
+paper track and 10-15 on the candles track by 2026-08-05. If that holds, the
+primary hypothesis is underpowered by close to an order of magnitude against
+its own central expectation, and the sentence "a fail closes this hypothesis"
+would be unsupportable - a FAIL would be indistinguishable from silence.
+
+RULE 1 - MANDATORY POWER ANNOTATION. Every verdict this evaluator emits must
+be reported beside the MinTRL requirement for a 62% true win rate. A FAIL may
+be read as refutation ONLY when the realised independent-trade count meets
+that requirement. Otherwise the outcome is recorded as
+"INCONCLUSIVE - UNDERPOWERED", never as FAIL. This is a reporting
+requirement, not a criteria change: PASS still requires exactly what was
+registered.
+
+RULE 2 - ONE PRE-COMMITTED EXTENSION. If, at 2026-08-05, the primary
+hypothesis H3 has fewer than 20 clusters (the registered minimum), the
+collection window extends ONCE, to 2026-09-02, and the single permitted
+evaluation is run at whichever comes first: the date H3 reaches 20 clusters,
+or 2026-09-02. Conditions, all fixed now:
+  - The trigger is SAMPLE SIZE ONLY. It may never reference an observed win
+    rate, p-value, or verdict. No forward result may be inspected to decide
+    whether to extend - and because the evaluator has never been run, none
+    has been.
+  - ONE extension only. No second extension under any circumstance.
+  - Gates, thresholds, the frozen models, the instrument universe and
+    ALPHA = 0.05/4 are unchanged.
+  - If H3 still has fewer than 20 clusters on 2026-09-02, the result is
+    "INCONCLUSIVE - UNDERPOWERED" and the hypothesis is neither confirmed nor
+    closed. It may then be re-registered on a fresh window.
+  - forward_eval.py is still run exactly ONCE.
+
+RULE 3 - THE EXECUTION MEASUREMENT OUTRANKS THE VERDICT. Per the SPREAD
+HAIRCUT and FEED IDENTIFICATION sections, label fidelity decides whether any
+candle win rate is executable at all. It is a measurement with no pass/fail
+and is explicitly NOT bound by Rule 2's dates: it continues until it has an
+answer, and a verdict of any kind on H2/H3/H4 does not close it.
+
 ## JUDGE PANEL + EVALUATOR CORRECTIONS (2026-07-25, before ANY verdict run)
 
 A four-lens independent panel (statistical integrity / adversarial referee /

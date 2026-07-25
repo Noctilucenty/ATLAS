@@ -128,6 +128,12 @@ def cluster_stats(trades: list[tuple[str, int, bool, float]], purge_s: int) -> d
     }
 
 
+# MinTRL at the Bonferroni alpha for the document's central anchor (62% true
+# win rate). A FAIL below this is uninformative - see the PRE-COMMITTED POWER
+# RULE in FORWARD_TEST.md, Rule 1.
+MINTRL_AT_62 = 163
+
+
 def verdict(stats_dict: dict, min_clusters: int) -> str:
     if not stats_dict.get("clusters"):
         return "INCONCLUSIVE - no trades"
@@ -135,10 +141,39 @@ def verdict(stats_dict: dict, min_clusters: int) -> str:
         return f"INCONCLUSIVE - {stats_dict['clusters']} clusters < {min_clusters} required"
     beats = stats_dict["cluster_win_frac"] > stats_dict["breakeven"]
     sig = stats_dict["p_one_sided"] is not None and stats_dict["p_one_sided"] < ALPHA
-    return "PASS" if (beats and sig) else "FAIL"
+    if beats and sig:
+        return "PASS"
+    # Rule 1: a FAIL is only refutation when the window could have detected
+    # the effect. Below MinTRL the honest answer is that we cannot tell.
+    independent = stats_dict.get("independent") or 0
+    if independent < MINTRL_AT_62:
+        return (f"INCONCLUSIVE - UNDERPOWERED ({independent} independent "
+                f"trades < MinTRL {MINTRL_AT_62} at the 62% anchor; "
+                "not refutation)")
+    return "FAIL"
 
 
-def load_bundle(name: str, cutoff_ts: int | None = None):
+def model_forward_start(meta: dict, cutoff_ts: int, horizon: int) -> int:
+    """First bar close-time a bundle may legitimately be SCORED on.
+
+    A model whose training data ends at T has absorbed prices through
+    T + horizon, because the label at bar T looks `horizon` bars forward
+    (features.py: exercise = close[t + horizon]). Scoring it on any bar at or
+    before T + horizon would score it on its own training labels. So the
+    effective start is max(registration cutoff, data_end_ts + horizon).
+
+    This is a DERIVED quantity - both inputs are properties of artifacts that
+    existed before any forward data, so it carries no outcome-informed degree
+    of freedom, and it is strictly more precise than refusing the bundle
+    outright (audit 2026-07-25, judge panel).
+    """
+    end = meta.get("data_end_ts")
+    if end is None:
+        return cutoff_ts
+    return max(int(cutoff_ts), int(end) + horizon * 60)
+
+
+def load_bundle(name: str, cutoff_ts: int | None = None, purge: bool = False):
     """Load the newest matching bundle, REFUSING any model whose training
     data extends past the forward cutoff - a routine retrain after the
     cutoff would otherwise silently train on the forward window and
@@ -158,7 +193,15 @@ def load_bundle(name: str, cutoff_ts: int | None = None):
             print(f"WARN {paths[-1].name} has no data_end_ts - the "
                   "post-cutoff guard could NOT verify this bundle",
                   file=sys.stderr, flush=True)
-        if end is not None and end > cutoff_ts:
+        if end is not None and end > cutoff_ts and purge:
+            # The caller commits to purging via model_forward_start(), which
+            # removes every bar this bundle could have learned from. That is a
+            # strictly tighter guarantee than refusal, so allow the load.
+            print(f"NOTE {paths[-1].name} trained through {end} > cutoff "
+                  f"{cutoff_ts}; scoring starts at its data_end_ts + one "
+                  "label horizon instead (per-model purge)",
+                  file=sys.stderr, flush=True)
+        elif end is not None and end > cutoff_ts:
             raise SystemExit(
                 f"{paths[-1].name} trained through {end} > cutoff {cutoff_ts}: "
                 "this model has seen the forward window and must not score it. "
@@ -188,10 +231,13 @@ def meta_probabilities(meta_bundle, frame: pd.DataFrame, p_up, actions) -> np.nd
 
 def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa: C901
                   h2_glob: str = "h2-*.pkl", h4_glob: str = "h4-*.pkl") -> dict:
-    model_name, bundle = load_bundle(h2_glob, cutoff_ts)
+    model_name, bundle = load_bundle(h2_glob, cutoff_ts, purge=True)
     model, meta = bundle["model"], bundle["meta"]
-    _, meta_bundle = load_bundle("meta-h3.pkl", cutoff_ts)
+    _, meta_bundle = load_bundle("meta-h3.pkl", cutoff_ts, purge=True)
     feature_cols = meta["feature_columns"]
+    # Per-model purge: H2/H2-secondary/H3 all score the H2 bundle, so they
+    # share its start. H4 has its own bundle and therefore its own start.
+    h2_start = model_forward_start(meta, cutoff_ts, horizon)
 
     conn = open_db()
     parts = []
@@ -210,7 +256,7 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa:
         .reset_index(drop=True)
     )
     pooled = add_cross_asset(pooled)
-    forward = pooled[pooled["to_ts"] > cutoff_ts].reset_index(drop=True)
+    forward = pooled[pooled["to_ts"] > h2_start].reset_index(drop=True)
     # VERDICT UNIVERSE FREEZE (pre-verdict correction, 2026-07-24): the
     # registered hypotheses are evaluated on the instrument set the frozen
     # model was trained on. Instruments registered AFTER the cutoff (for
@@ -221,14 +267,19 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa:
     forward = forward[forward["asset"].isin(frozen_assets)].reset_index(drop=True)
     print(f"[candles] model={model_name} frozen-universe rows={len(forward)} "
           f"(+{len(expanded)} rows from post-registration instruments, reported only) "
-          f"(cutoff {datetime.fromtimestamp(cutoff_ts, timezone.utc).isoformat()})",
+          f"(cutoff {datetime.fromtimestamp(cutoff_ts, timezone.utc).isoformat()}, "
+          f"H2 scoring starts {datetime.fromtimestamp(h2_start, timezone.utc).isoformat()})",
           flush=True)
     if forward.empty:
         return {"error": "no forward rows - collector has not gathered new data yet"}
 
     p_up = model.predict_proba_up(forward[feature_cols])
     purge_s = horizon * 60
-    out = {"forward_rows": len(forward), "model": model_name}
+    out = {"forward_rows": len(forward), "model": model_name,
+           "h2_scoring_start_utc": datetime.fromtimestamp(
+               h2_start, timezone.utc).isoformat(),
+           "registration_cutoff_utc": datetime.fromtimestamp(
+               cutoff_ts, timezone.utc).isoformat()}
 
     def observed_payout(asset: str, ts: int) -> float:
         """Causal payout at signal time from real snapshots; the registered
@@ -297,23 +348,32 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa:
             s["meta_kept"] = f"{len(trades)}/{len(idx)}"
             out[key] = s
 
-    # H4 (registered): the extra-vol model at the primary gate.
+    # H4 (registered): the extra-vol model at the primary gate. Its bundle was
+    # trained later than H2's, so it carries its OWN purge boundary - scoring
+    # it from H2's start would score it on its own training labels.
     try:
-        h4_name, h4_bundle = load_bundle(h4_glob, cutoff_ts)
+        h4_name, h4_bundle = load_bundle(h4_glob, cutoff_ts, purge=True)
+        h4_start = model_forward_start(h4_bundle["meta"], cutoff_ts, horizon)
         h4_cols = h4_bundle["meta"]["feature_columns"]
         p4 = h4_bundle["model"].predict_proba_up(forward[h4_cols])
-        trades = []
+        trades, skipped = [], 0
         for i, p in enumerate(p4):
+            row = forward.iloc[i]
+            ts = int(row["to_ts"])
+            if ts <= h4_start:
+                skipped += 1          # inside H4's own information horizon
+                continue
             action = decide_action(float(p), payout_fallback, H2_PRIMARY_MARGIN)
             if action == "no_trade":
                 continue
-            row = forward.iloc[i]
             won = (row["label_up"] == 1.0) == (action == "binary_call")
-            ts = int(row["to_ts"])
             trades.append((row["asset"], ts, bool(won), observed_payout(row["asset"], ts)))
         s4 = cluster_stats(trades, purge_s)
         s4["verdict"] = verdict(s4, MIN_CLUSTERS_CANDLES)
         s4["model"] = h4_name
+        s4["h4_scoring_start_utc"] = datetime.fromtimestamp(
+            h4_start, timezone.utc).isoformat()
+        s4["rows_purged_inside_h4_horizon"] = skipped
         out["h4"] = s4
     except SystemExit as exc:
         out["h4"] = {"error": str(exc)}
