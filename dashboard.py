@@ -201,6 +201,10 @@ td.dim { color:var(--dim); } .call { color:var(--green); } .put { color:var(--re
     <div id="fid"></div>
     <div class="meter"><i id="fidbar" style="width:0%"></i></div></div>
   <div class="card"><h2><span class="idx">03</span>Signals &amp; Orders</h2><div id="sig"></div></div>
+  <div class="card"><h2><span class="idx">3b</span>Signal Universe<span class="sub">frozen training basket</span></h2>
+    <div id="uni"></div>
+    <div class="meter"><i id="unibar" style="width:0%"></i></div>
+    <div class="tele" style="margin-top:6px">outside = no validated edge; the registered verdict excludes it</div></div>
   <div class="card w8"><h2><span class="idx">04</span>Model Confidence<span class="sub">max |p−.5| per cycle</span></h2><canvas id="conf"></canvas></div>
   <div class="card"><h2><span class="idx">05</span>Signals · UTC Hour</h2><canvas id="hours"></canvas></div>
   <div class="card"><h2><span class="idx">06</span>Equity<span class="sub">settled demo $</span></h2><canvas id="equity"></canvas></div>
@@ -329,6 +333,23 @@ async function refresh(){
   el("sig").innerHTML =
     kv("signals logged", g.total) + kv("orders placed", g.orders_placed) +
     kv("settled", g.settled, "g") + kv("OTC skipped · by design", g.otc_skipped, "plain");
+
+  const u = s.universe || {};
+  if (u.universe_size) {
+    el("uni").innerHTML =
+      kv("frozen basket", u.universe_size) +
+      kv("in-universe", u.in_universe, "g") +
+      kv("out-of-universe", u.out_of_universe, u.out_of_universe ? "r" : "plain") +
+      (Object.keys(u.out_by_asset||{}).length
+        ? `<div class="tele" style="margin-top:6px">outside: ` +
+          Object.entries(u.out_by_asset).map(([a,n])=>`${a} (${n})`).join(", ") +
+          `</div>` : "");
+    const inShare = u.in_universe + u.out_of_universe
+      ? 100*u.in_universe/(u.in_universe+u.out_of_universe) : 0;
+    el("unibar").style.width = inShare + "%";
+  } else {
+    el("uni").innerHTML = `<div class="tele">frozen universe unavailable</div>`;
+  }
 
   line("conf", d.heartbeats.filter(h=>h.max_conf!=null).map(h=>[h.ts,h.max_conf]),
        AMBER, v=>v.toFixed(3));

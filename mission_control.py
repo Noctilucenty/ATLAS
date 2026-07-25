@@ -100,21 +100,36 @@ def expected_value(p_up: float, payout: float) -> float:
     return max(call_ev, put_ev)
 
 
+_UNIVERSE_CACHE: tuple[str, float, frozenset] | None = None
+
+
 def frozen_universe() -> set[str]:
     """The instruments the deployed H2 bundle was actually trained on
     (bundle meta['assets']). Signals on anything else are scored by a model
     that never saw that market, and the registered candles verdict filters
     them out - so their win rate must never be blended into the deployed
-    universe's (audit 2026-07-24)."""
+    universe's (audit 2026-07-24).
+
+    Cached on (path, mtime): the dashboard rebuilds status every 60 s from a
+    threading server, and unpickling a LightGBM bundle per request is pure
+    waste for a file that is frozen by design. A rebuilt model changes mtime
+    and is picked up automatically."""
+    global _UNIVERSE_CACHE
     try:
-        import pickle
         paths = sorted((PROJECT_DIR / "models").glob("h2-*.pkl"))
         if not paths:
             return set()
+        path = paths[-1]
+        key = (str(path), path.stat().st_mtime)
+        if _UNIVERSE_CACHE and _UNIVERSE_CACHE[:2] == key:
+            return set(_UNIVERSE_CACHE[2])
+        import pickle
         # Project's own frozen bundle - the live runner unpickles it hourly.
-        with open(paths[-1], "rb") as fh:
+        with open(path, "rb") as fh:
             bundle = pickle.load(fh)
-        return set(bundle.get("meta", {}).get("assets") or [])
+        assets = frozenset(bundle.get("meta", {}).get("assets") or [])
+        _UNIVERSE_CACHE = (key[0], key[1], assets)
+        return set(assets)
     except Exception:
         return set()
 
