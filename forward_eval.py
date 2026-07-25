@@ -142,6 +142,14 @@ def load_bundle(name: str, cutoff_ts: int | None = None):
         bundle = pickle.load(fh)
     if cutoff_ts is not None:
         end = bundle.get("meta", {}).get("data_end_ts")
+        if end is None:
+            # Silence here is not safety: meta-h3.pkl carries no data_end_ts,
+            # so the PRIMARY hypothesis's model passes this guard without ever
+            # being checked (audit 2026-07-24). Say so rather than imply it
+            # was verified.
+            print(f"WARN {paths[-1].name} has no data_end_ts - the "
+                  "post-cutoff guard could NOT verify this bundle",
+                  file=sys.stderr, flush=True)
         if end is not None and end > cutoff_ts:
             raise SystemExit(
                 f"{paths[-1].name} trained through {end} > cutoff {cutoff_ts}: "

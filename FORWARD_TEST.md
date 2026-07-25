@@ -460,6 +460,18 @@ LIVE-EXECUTION FIDELITY (affects signals already logged):
 - live_h2_runner's model loader has no post-cutoff refusal, so a retrain
   would silently swap a contaminated model into the live window.
 
+FIDELITY REPAIR MADE 2026-07-24 (restores the frozen configuration; loosens
+no criterion): the runner now aggregates xs_base_str / xs_quote_str /
+xs_mkt_vol over the model bundle's own meta['assets'] (the frozen 16) rather
+than the live 39-instrument list. Non-basket instruments are still scored and
+paper-logged exactly as before - they simply no longer contribute to, or get
+self-excluded from, the aggregates. A test asserts the live function is
+NUMERICALLY IDENTICAL to research_pooled.add_cross_asset (the implementation
+the frozen features were built with) on the same basket, so live and training
+semantics can no longer drift apart silently. Applied while the market was
+closed, so no session was split mid-flight. Signals logged 2026-07-24 BEFORE
+this repair carry the 39-basket columns and are marked by their timestamps.
+
 CHANGES ACTUALLY MADE (criteria-neutral, ergonomics only):
 - forward_eval gained --h2-model/--h4-model globs, implementing the remedy
   the refusal message already advertised. The post-cutoff guard still

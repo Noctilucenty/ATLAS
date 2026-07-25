@@ -33,6 +33,7 @@ from train import decide_action
 PROJECT_DIR = Path(__file__).resolve().parent
 CANDLE_COUNT = 560  # covers REGIME_WINDOW=480 warmup plus slack
 EV_MARGIN = 0.03    # FORWARD_TEST.md hypothesis #2 primary gate - do not tune
+REGISTERED_CUTOFF_TS = 1784678400  # 2026-07-22T00:00:00Z, FORWARD_TEST.md
 EXPIRY_MINUTES = 15
 TRADE_AMOUNT = 1.0
 _LOCK_SOCK = None  # single-instance lock socket, bound in main()
@@ -149,7 +150,50 @@ def normalize(raw: list) -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates("from_ts").sort_values("from_ts")
 
 
-def latest_feature_rows(client, horizon: int) -> pd.DataFrame:
+def cross_asset_columns(frame: pd.DataFrame, basket: set[str] | None):
+    """(xs_base_str, xs_quote_str, xs_mkt_vol) for one timestamp snapshot,
+    aggregated over the FROZEN training basket only.
+
+    Mirrors research_pooled.add_cross_asset exactly - signed currency
+    strength with each pair's own contribution excluded, and cross-sectional
+    mean |ret_5| for activity - but restricted to `basket` (the model's
+    meta['assets']).
+
+    Audit 2026-07-24: this used the LIVE instrument list, which has grown
+    from the frozen 16 to 39. Aggregating strength and market volatility
+    over pairs the model never saw (gold, exotic OTC crosses) shifted
+    xs_mkt_vol ~42%, feeding the frozen model out-of-distribution columns on
+    every signal. Assets outside the basket are still SCORED - they just no
+    longer contribute to, and are not self-excluded from, the aggregates.
+    """
+    ret5 = dict(zip(frame["asset"], frame["ret_5"]))
+    contributors = {a: float(r) for a, r in ret5.items()
+                    if basket is None or a in basket}
+
+    num: dict[str, float] = {}
+    cnt: dict[str, int] = {}
+    for asset, r in contributors.items():
+        base, quote = currencies(asset)
+        for cur, sign in ((base, 1.0), (quote, -1.0)):
+            num[cur] = num.get(cur, 0.0) + sign * r
+            cnt[cur] = cnt.get(cur, 0) + 1
+
+    base_str, quote_str = [], []
+    for asset in frame["asset"]:
+        base, quote = currencies(asset)
+        own = contributors.get(asset, 0.0)
+        own_n = 1 if asset in contributors else 0
+        b_n, b_c = num.get(base, 0.0) - own, cnt.get(base, 0) - own_n
+        q_n, q_c = num.get(quote, 0.0) + own, cnt.get(quote, 0) - own_n
+        base_str.append(b_n / b_c if b_c > 0 else 0.0)
+        quote_str.append(q_n / q_c if q_c > 0 else 0.0)
+
+    mkt_vol = (float(np.mean([abs(r) for r in contributors.values()]))
+               if contributors else 0.0)
+    return base_str, quote_str, mkt_vol
+
+
+def latest_feature_rows(client, horizon: int, basket: set[str] | None = None) -> pd.DataFrame:
     """One feature row per asset for the most recent CLOSED bar, with
     cross-asset currency-strength columns computed from the same snapshot."""
     per_asset = []
@@ -171,25 +215,12 @@ def latest_feature_rows(client, horizon: int) -> pd.DataFrame:
     if not per_asset:
         return pd.DataFrame()
     frame = pd.concat(per_asset, ignore_index=True)
-    # Cross-asset strengths at this single timestamp, own pair excluded.
-    ret5 = dict(zip(frame["asset"], frame["ret_5"]))
-    num, cnt = {}, {}
-    for asset, r in ret5.items():
-        base, quote = currencies(asset)
-        for cur, sign in ((base, 1.0), (quote, -1.0)):
-            num[cur] = num.get(cur, 0.0) + sign * r
-            cnt[cur] = cnt.get(cur, 0) + 1
-    base_str, quote_str = [], []
-    for asset in frame["asset"]:
-        base, quote = currencies(asset)
-        r = ret5[asset]
-        b_n, b_c = num[base] - r, cnt[base] - 1
-        q_n, q_c = num[quote] + r, cnt[quote] - 1
-        base_str.append(b_n / b_c if b_c else 0.0)
-        quote_str.append(q_n / q_c if q_c else 0.0)
+    # Cross-asset strengths at this single timestamp, aggregated over the
+    # model's frozen training basket (own pair excluded).
+    base_str, quote_str, mkt_vol = cross_asset_columns(frame, basket)
     frame["xs_base_str"] = base_str
     frame["xs_quote_str"] = quote_str
-    frame["xs_mkt_vol"] = float(np.mean([abs(r) for r in ret5.values()]))
+    frame["xs_mkt_vol"] = mkt_vol
     return frame
 
 
@@ -231,7 +262,30 @@ def main() -> int:
     h4_bundle = load_shadow_h4()
     horizon = meta["horizon_bars"]
     feature_cols = meta["feature_columns"]
+    # Cross-asset columns must be aggregated over the basket the model was
+    # trained on, not today's (larger) live instrument list - see
+    # cross_asset_columns. Taken from the bundle so it self-corrects for any
+    # future model.
+    basket = set(meta.get("assets") or []) or None
     print(f"model={model_name} rows={meta['rows']} data_end={meta['data_end_ts']}", flush=True)
+    # Visibility, not enforcement: the evaluator REFUSES a post-cutoff model,
+    # but the live track is a measurement and halting it would cost more than
+    # it protects. Say so loudly every session instead (audit 2026-07-24).
+    end = meta.get("data_end_ts")
+    if end is not None and end > REGISTERED_CUTOFF_TS:
+        print(f"WARN {model_name} trained through {end}, "
+              f"{(end - REGISTERED_CUTOFF_TS) / 3600:.2f}h PAST the registered "
+              f"cutoff {REGISTERED_CUTOFF_TS} - forward_eval will refuse this "
+              "bundle; see FORWARD_TEST.md 'SECOND pre-verdict audit'",
+              file=sys.stderr, flush=True)
+    if basket:
+        extra = len(INSTRUMENTS) - len(basket & set(INSTRUMENTS))
+        print(f"cross-asset basket: {len(basket)} frozen assets "
+              f"({extra} live instruments scored but not contributing)",
+              flush=True)
+    else:
+        print("WARN model bundle has no 'assets' - cross-asset columns fall "
+              "back to the full live basket", file=sys.stderr, flush=True)
 
     client = IQ_Option(os.environ["IQ_EMAIL"], os.environ["IQ_PASSWORD"])
     ok, reason = _call(client.connect, timeout=90)
@@ -252,7 +306,7 @@ def main() -> int:
         time.sleep(max(0.0, 60 - time.time() % 60) + 2)
         cycle_ts = int(time.time())
         try:
-            frame = latest_feature_rows(client, horizon)
+            frame = latest_feature_rows(client, horizon, basket)
             if frame.empty:
                 # A fully dead connection lands here for every cycle; the
                 # old code skipped both the heartbeat and the failure
