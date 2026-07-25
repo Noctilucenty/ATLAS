@@ -205,6 +205,72 @@ def check_backup(rep: Report) -> None:
                          f"newest {age_h:.1f} h old")
 
 
+# Credential shapes worth refusing to publish. This repository is PUBLIC by
+# the operator's explicit choice, so a key reaching a TRACKED file is
+# published the moment anything is pushed - and git history keeps it even
+# after deletion. Patterns are deliberately prefix-based (no generic
+# high-entropy heuristics) to keep false positives near zero.
+SECRET_PATTERNS = [
+    ("Perplexity API key", re.compile(r"pplx-[A-Za-z0-9]{32,}")),
+    ("OpenAI API key", re.compile(r"sk-[A-Za-z0-9]{32,}")),
+    ("AWS access key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("GitHub token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}")),
+    ("Slack token", re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}")),
+    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+]
+
+
+def check_secrets(rep: Report) -> None:
+    """Scan git-TRACKED files for credential shapes.
+
+    Only tracked files matter: .env is gitignored, so a key living there is
+    correct and must not be flagged. Anything git knows about is publishable.
+    """
+    try:
+        listing = subprocess.run(["git", "ls-files"], cwd=PROJECT_DIR,
+                                 capture_output=True, text=True, timeout=60,
+                                 creationflags=NO_WINDOW)
+    except Exception as exc:
+        rep.warn("secret scan", f"could not list tracked files: {type(exc).__name__}")
+        return
+    if listing.returncode != 0:
+        rep.warn("secret scan", "git ls-files failed")
+        return
+
+    hits, scanned = [], 0
+    for rel in listing.stdout.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        path = PROJECT_DIR / rel
+        try:
+            if not path.is_file() or path.stat().st_size > 2_000_000:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        scanned += 1
+        for name, pattern in SECRET_PATTERNS:
+            if pattern.search(text):
+                hits.append(f"{rel}: {name}")
+
+    if hits:
+        rep.fail("secret scan",
+                 f"CREDENTIALS IN TRACKED FILES ({len(hits)}): "
+                 + "; ".join(hits[:5]))
+    else:
+        rep.ok("secret scan", f"{scanned} tracked files, no credentials found")
+
+    # .env must stay untracked, or the next commit publishes real credentials.
+    env_tracked = subprocess.run(["git", "ls-files", "--error-unmatch", ".env"],
+                                 cwd=PROJECT_DIR, capture_output=True,
+                                 text=True, timeout=30, creationflags=NO_WINDOW)
+    if env_tracked.returncode == 0:
+        rep.fail("secret scan", ".env is TRACKED by git - it holds live credentials")
+    else:
+        rep.ok("secret scan .env", "untracked, as it must be")
+
+
 def check_git(rep: Report) -> None:
     def git(*args):
         return subprocess.run(["git", *args], cwd=PROJECT_DIR,
@@ -252,8 +318,8 @@ def main() -> int:
     args = ap.parse_args()
 
     rep = Report()
-    for fn in (check_tasks, check_disk, check_safety, check_models,
-               check_database, check_backup, check_git):
+    for fn in (check_tasks, check_disk, check_safety, check_secrets,
+               check_models, check_database, check_backup, check_git):
         try:
             fn(rep)
         except Exception as exc:
