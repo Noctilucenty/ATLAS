@@ -43,8 +43,8 @@ def test_expected_value_matches_binary_economics():
 
 def test_forward_progress_counts_only_registered_gates():
     signals = [
-        # ev = .122 > .04 > .03 ; meta above threshold ; h4 present
-        {"p_up": 0.6, "payout": 0.87, "meta_p": 0.65, "h4_p": 0.5},
+        # ev = .122 > .04 > .03 ; meta above threshold ; h4 clears its own gate
+        {"p_up": 0.6, "payout": 0.87, "meta_p": 0.65, "h4_p": 0.6},
         # ev = .028 -> below both EV gates, meta irrelevant
         {"p_up": 0.55, "payout": 0.87, "meta_p": 0.99},
     ]
@@ -53,6 +53,15 @@ def test_forward_progress_counts_only_registered_gates():
     assert counts["H2s ev0.04"] == 1
     assert counts["H3 meta0.60"] == 1
     assert counts["H4"] == 1
+
+
+def test_h4_is_gated_on_its_own_probability_not_h2s():
+    # H2 clears its gate (p_up .60) but the H4 model disagrees (h4_p .50,
+    # EV = -0.065): H4 must NOT be credited with H2's decision.
+    counts = mc.forward_progress(
+        [{"p_up": 0.6, "payout": 0.87, "meta_p": 0.1, "h4_p": 0.5}])
+    assert counts["H2p ev0.03"] == 1
+    assert counts["H4"] == 0
 
 
 # ------------------------------------------------------- supervisor parsing

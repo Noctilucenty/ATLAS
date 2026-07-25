@@ -115,7 +115,11 @@ def forward_progress(signals: list[dict]) -> dict:
             counts["H2s ev0.04"] += 1
         if (r.get("meta_p") or 0.0) >= 0.60 and ev > 0.03:
             counts["H3 meta0.60"] += 1
-        if r.get("h4_p") is not None:
+        # H4 is H2's config PLUS extra_vol, i.e. its own model and therefore
+        # its own EV. Counting "h4_p is present" credited H4 with H2's gate
+        # decision (audit 2026-07-24); gate H4 on the H4 probability.
+        h4_p = r.get("h4_p")
+        if h4_p is not None and expected_value(float(h4_p), float(payout)) > 0.03:
             counts["H4"] += 1
     return counts
 
