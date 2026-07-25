@@ -10,7 +10,7 @@ import pytest
 
 import backup_state
 import mission_control as mc
-from settle_missing import index_closed_options
+from settle_missing import index_closed_options, index_positions
 
 
 # --------------------------------------------- sidecar visibility (systemic)
@@ -108,6 +108,39 @@ def test_index_closed_options_maps_every_id_in_the_list():
     assert out[112] == ("win", pytest.approx(0.87))   # list ids share outcome
     assert out[222] == ("loose", pytest.approx(-1.0))
     assert out[333] == ("equal", 0.0)
+
+
+def test_index_closed_options_reads_the_v1_nesting():
+    """get_optioninfo v1 nests under msg.result.closed_options (v2 nests
+    under msg.closed_options and times out anyway)."""
+    v1 = {"msg": {"result": {"closed_options": [
+        {"id": [42], "win": "win", "amount": 1.0, "win_amount": 1.87}]}}}
+    out = index_closed_options(v1)
+    assert set(out) == {42}
+    win, profit = out[42]
+    assert win == "win"
+    assert profit == pytest.approx(0.87)
+
+
+def test_index_positions_reads_plausible_field_spellings():
+    payload = {"positions": [
+        {"external_id": 555, "close_reason": "win", "pnl_realized": 0.87},
+        {"order_ids": [666, 667], "close_reason": "lose", "pnl": -1.0},
+        {"id": 777, "status": "equal", "profit": 0.0},
+        {"id": 888},                      # unreadable -> skipped, not guessed
+    ]}
+    out = index_positions(payload)
+    assert out[555] == ("win", pytest.approx(0.87))
+    assert out[666] == ("loose", pytest.approx(-1.0))   # vocabulary normalised
+    assert out[667] == ("loose", pytest.approx(-1.0))
+    assert out[777] == ("equal", 0.0)
+    assert 888 not in out
+
+
+def test_index_positions_survives_garbage():
+    assert index_positions({}) == {}
+    assert index_positions({"positions": None}) == {}
+    assert index_positions({"positions": ["not a dict"]}) == {}
 
 
 def test_index_closed_options_survives_garbage():

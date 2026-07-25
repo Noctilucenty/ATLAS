@@ -5,13 +5,23 @@ kill, crash), live_h2.jsonl keeps the signal row with an order_id but never
 receives its settled duplicate - and the label-fidelity measurement quietly
 loses a trade.
 
-IMPORTANT (audit 2026-07-24): this must NOT use check_win_v4. That call
-blocks on api.socket_option_closed[id], a dict populated only by the
-close event of an option bought in the SAME session - for an orphan from a
-dead process the key never appears, so every recovery would hang until its
-timeout. The broker's closed-options history (get_optioninfo_v2) is the
-only channel that can answer for past orders, so we page through it and
-match by id.
+WHICH BROKER API (probed live 2026-07-25, because two plausible ones do not
+work):
+- check_win_v4 CANNOT settle an orphan: it blocks on
+  api.socket_option_closed[id], populated only by the close event of an
+  option bought in the SAME session, so the key never appears for an order
+  from a dead process.
+- get_optioninfo_v2 TIMES OUT on this account (busy-waits for a websocket
+  reply that never arrives).
+- get_position_history and get_positions also TIME OUT.
+- WORKING: get_position_history_v2(instrument_type, limit, offset, start,
+  end) returns {"positions": [...]}, and get_optioninfo(limit) v1 returns
+  msg.result.closed_options. Both are used here, history_v2 first.
+
+Because no settled order has existed yet, the exact field names inside a
+position entry are still unverified. Parsing is therefore defensive and,
+when it cannot match an orphan, the RAW payload is written to
+logs/order_records/ so the real shape is learned instead of silently lost.
 
 Run while the runner is idle if possible (both append to the same file).
 
@@ -36,8 +46,23 @@ def find_unsettled(rows: list[dict]) -> list[dict]:
             and r["order_id"] not in settled_ids]
 
 
+def _closed_option_entries(payload) -> list:
+    """closed_options list from either get_optioninfo (v1: msg.result.
+    closed_options) or a v2-shaped payload (msg.closed_options)."""
+    if not isinstance(payload, dict):
+        return []
+    msg = payload.get("msg")
+    if not isinstance(msg, dict):
+        return []
+    result = msg.get("result")
+    if isinstance(result, dict) and isinstance(result.get("closed_options"), list):
+        return result["closed_options"]
+    return msg.get("closed_options") if isinstance(
+        msg.get("closed_options"), list) else []
+
+
 def index_closed_options(payload) -> dict[int, tuple[str, float]]:
-    """{order_id: (win, profit)} from a get_optioninfo_v2 response.
+    """{order_id: (win, profit)} from a get_optioninfo response.
 
     The broker returns each closed option with 'id' as a LIST (see the
     vendored check_win_v3), so every id in it maps to the same outcome.
@@ -45,11 +70,9 @@ def index_closed_options(payload) -> dict[int, tuple[str, float]]:
     win_amount - amount (a loss has win_amount 0, giving -amount).
     Pure - unit-tested."""
     out: dict[int, tuple[str, float]] = {}
-    try:
-        options = payload["msg"]["closed_options"]
-    except (KeyError, TypeError):
-        return out
-    for opt in options or []:
+    for opt in _closed_option_entries(payload):
+        if not isinstance(opt, dict):
+            continue
         try:
             win = opt["win"]
             amount = float(opt.get("amount") or 0.0)
@@ -65,11 +88,54 @@ def index_closed_options(payload) -> dict[int, tuple[str, float]]:
     return out
 
 
+# Field names a position entry might use for the outcome and the money.
+_WIN_KEYS = ("close_reason", "win", "status")
+_PNL_KEYS = ("pnl_realized", "pnl", "profit", "close_profit")
+_ID_KEYS = ("external_id", "order_ids", "raw_event_id", "id")
+
+
+def index_positions(payload) -> dict[int, tuple[str, float]]:
+    """{order_id: (win, profit)} from get_position_history_v2's positions.
+
+    Field names are unverified until a real settled position exists, so this
+    probes the plausible spellings and skips anything it cannot read rather
+    than guessing. Pure - unit-tested."""
+    out: dict[int, tuple[str, float]] = {}
+    positions = payload.get("positions") if isinstance(payload, dict) else None
+    for pos in positions or []:
+        if not isinstance(pos, dict):
+            continue
+        win = next((str(pos[k]) for k in _WIN_KEYS
+                    if isinstance(pos.get(k), str)), None)
+        pnl = next((float(pos[k]) for k in _PNL_KEYS
+                    if isinstance(pos.get(k), (int, float))), None)
+        if win is None or pnl is None:
+            continue
+        # Normalise the broker's vocabulary onto the runner's.
+        win = {"won": "win", "win": "win", "lose": "loose", "loose": "loose",
+               "equal": "equal", "tie": "equal"}.get(win.lower(), win.lower())
+        ids: list = []
+        for key in _ID_KEYS:
+            v = pos.get(key)
+            if isinstance(v, (list, tuple)):
+                ids.extend(v)
+            elif v is not None:
+                ids.append(v)
+        for oid in ids:
+            try:
+                out[int(oid)] = (win, pnl)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=200,
-                    help="closed options to page from the broker (default 200)")
+                    help="history entries to page from the broker (default 200)")
+    ap.add_argument("--days", type=int, default=7,
+                    help="how far back to search position history (default 7)")
     args = ap.parse_args()
 
     rows = []
@@ -96,13 +162,39 @@ def main() -> int:
     if not ok:
         raise SystemExit(f"login failed: {reason}")
 
+    import time
+
+    now = int(time.time())
+    start = now - args.days * 86400
+    verdicts: dict[int, tuple[str, float]] = {}
+    raw: dict = {}
+
+    # Primary: position history v2 (the only history call that responds).
+    for instrument_type in ("binary-option", "turbo-option"):
+        try:
+            res = _call(client.get_position_history_v2, instrument_type,
+                        args.limit, 0, start, now, timeout=60)
+            payload = res[1] if isinstance(res, tuple) and len(res) == 2 else res
+            raw[f"position_history_v2:{instrument_type}"] = payload
+            found = index_positions(payload or {})
+            verdicts.update(found)
+            print(f"position_history_v2 {instrument_type}: "
+                  f"{len(found)} settled id(s)")
+        except Exception as exc:
+            print(f"WARN position_history_v2 {instrument_type}: "
+                  f"{type(exc).__name__}", file=sys.stderr)
+
+    # Secondary: the v1 option info (v2 times out on this account).
     try:
-        payload = _call(client.get_optioninfo_v2, args.limit, timeout=90)
+        payload = _call(client.get_optioninfo, args.limit, timeout=60)
+        raw["optioninfo_v1"] = payload
+        found = index_closed_options(payload)
+        verdicts.update(found)
+        print(f"optioninfo v1: {len(found)} closed option id(s)")
     except Exception as exc:
-        raise SystemExit(f"could not read closed-options history: "
-                         f"{type(exc).__name__}: {exc}")
-    verdicts = index_closed_options(payload)
-    print(f"broker history: {len(verdicts)} closed option id(s)")
+        print(f"WARN optioninfo v1: {type(exc).__name__}", file=sys.stderr)
+
+    print(f"broker history: {len(verdicts)} settled id(s) total")
 
     recovered, unmatched = 0, []
     for record in orphans:
@@ -121,9 +213,17 @@ def main() -> int:
 
     print(f"recovered {recovered}/{len(orphans)}")
     if unmatched:
-        print(f"  not in the last {args.limit} closed options: "
-              f"{', '.join(str(o) for o in unmatched)}\n"
-              f"  retry with a larger --limit", file=sys.stderr)
+        # Field names inside a position entry are unverified until a real
+        # settled order exists. Dump the raw payloads so the true shape is
+        # LEARNED rather than lost to a silent miss.
+        dump = PROJECT_DIR / "logs" / "order_records" / "unmatched_history.json"
+        dump.parent.mkdir(parents=True, exist_ok=True)
+        dump.write_text(json.dumps({"unmatched": unmatched, "raw": raw},
+                                   indent=2, default=str), encoding="utf-8")
+        print(f"  unmatched: {', '.join(str(o) for o in unmatched)}\n"
+              f"  raw broker payloads written to {dump} - inspect it to fix "
+              f"the field mapping, or retry with a larger --limit/--days",
+              file=sys.stderr)
     # Nonzero when the job did not fully succeed, so a scripted caller can
     # tell "nothing to do" (0 orphans, exit 0) from "could not recover".
     return 0 if not unmatched else 1
