@@ -108,13 +108,30 @@ all read-only against the research state:
 | `ATLAS-watchdog` → `watchdog.py` | 15 min | health tiers, toast on CRITICAL, self-heals the dashboard |
 | `ATLAS-extra-collect` → `extra_collect.py` | hourly | banks the post-verdict candidate universe (SpaceX, synthetic indices) |
 | `ATLAS-catchup` → `catchup_gaps.py` | 6 h | heals collection holes beyond the supervisor's 2 h reach |
+| `ATLAS-backup` → `backup_state.py` | 6 h | offsite copy of the irreplaceable forward evidence |
 | dashboard → `dashboard.py` | always-on via watchdog | live Mission Control at `127.0.0.1:8787` |
 
-Plus on demand: `status.py` (terminal status, exit code = health tier),
-`settle_missing.py` (recover broker verdicts for orphaned orders),
-`research_payout_landscape.py` / `research_universe_profile.py`
-(descriptive ROI groundwork; JSON outputs under `logs/`).
+On demand:
+
+| Tool | Use |
+|---|---|
+| `selfcheck.py` | whole-host audit: tasks, disk, safety switches, model provenance, DB, backup, git, tests. Exit 0/1/2 — run before leaving the host unattended |
+| `status.py` | live trader status; exit code is the health tier |
+| `probe_order_record.py` | dumps a settled order's RAW broker record and flags price-like fields — the fast path to the label-fidelity answer if IQ exposes its strike |
+| `settle_missing.py` | recovers broker verdicts for orders orphaned by a mid-flight crash |
+| `research_payout_landscape.py` | payout stats per (asset, kind) × UTC hour → `logs/payout_landscape.json` |
+| `research_universe_profile.py` | structure profile of candidate instruments → `logs/universe_profile.json` |
+
 Shared read-only core: `mission_control.py`.
+
+**Broker API caveat (probed live 2026-07-25).** Several vendored history calls
+do not work on this account and must not be used: `get_optioninfo_v2`,
+`get_position_history` (v1) and `get_positions` all time out (they busy-wait
+for a websocket reply that never arrives). `check_win_v4` only settles orders
+bought in the SAME process. What does respond:
+`get_position_history_v2(instrument_type, limit, offset, start, end)` and
+`get_optioninfo(limit)` — note the v1 payload nests under
+`msg.result.closed_options`, one level deeper than v2.
 
 ---
 
