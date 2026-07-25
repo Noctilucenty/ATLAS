@@ -22,21 +22,44 @@ VERDICT_WINDOW = "Jul 28 - Aug 6, 2026"
 
 
 def latest_payouts() -> list[dict]:
-    """Most recent payout per quoted asset/kind, read-only."""
+    """Most recent BINARY payout for the instruments we actually trade.
+
+    The panels previously ranked all ~443 quoted keys by payout, which put
+    currency indices, crypto and single stocks (DXY, ONYXCOIN, AMAZON) on a
+    chart captioned as ours - markets the strategy does not touch. Restricted
+    to our tradable instruments' quote_keys, tagged with whether each one is
+    inside the frozen training universe, and to the BINARY kind because that
+    is the contract traded (audit 2026-07-25).
+    """
     if not MARKET_DB.exists():
         return []
     try:
+        from instruments import INSTRUMENTS
+        from mission_control import frozen_universe
+
+        frozen = frozen_universe()
+        wanted = {spec.quote_key: (asset, asset in frozen)
+                  for asset, spec in INSTRUMENTS.items() if spec.tradable}
         import duckdb
         conn = duckdb.connect(str(MARKET_DB), read_only=True)
         try:
             rows = conn.execute(
                 """SELECT asset, kind, payout FROM payout_snapshots
                    WHERE ts_epoch = (SELECT max(ts_epoch) FROM payout_snapshots)
+                     AND kind = 'binary'
                    ORDER BY payout DESC"""
             ).fetchall()
         finally:
             conn.close()
-        return [{"asset": a, "kind": k, "payout": float(p)} for a, k, p in rows]
+        out = []
+        for quote_key, kind, payout in rows:
+            hit = wanted.get(quote_key)
+            if not hit:
+                continue
+            asset, is_frozen = hit
+            out.append({"asset": asset, "kind": kind, "payout": float(payout),
+                        "frozen": is_frozen})
+        return out
     except Exception:
         return []
 
@@ -209,8 +232,8 @@ td.dim { color:var(--dim); } .call { color:var(--green); } .put { color:var(--re
   <div class="card"><h2><span class="idx">05</span>Signals · UTC Hour</h2><canvas id="hours"></canvas></div>
   <div class="card"><h2><span class="idx">06</span>Equity<span class="sub">settled demo $</span></h2><canvas id="equity"></canvas></div>
   <div class="card"><h2><span class="idx">07</span>Win Rate · Asset</h2><canvas id="wr"></canvas></div>
-  <div class="card"><h2><span class="idx">08</span>Live Payouts</h2><canvas id="pay"></canvas></div>
-  <div class="card"><h2><span class="idx">8b</span>Break-even WR<span class="sub">line = 57% calibrated floor</span></h2><canvas id="roi"></canvas></div>
+  <div class="card"><h2><span class="idx">08</span>Live Payouts<span class="sub">binary · ours only · * = frozen 16</span></h2><canvas id="pay"></canvas></div>
+  <div class="card"><h2><span class="idx">8b</span>Edge Margin<span class="sub">57% expectation − break-even</span></h2><canvas id="roi"></canvas></div>
   <div class="card w12"><h2><span class="idx">09</span>Signal Ledger<span class="sub">latest 25</span></h2>
     <table id="recent"><thead><tr><th>time utc</th><th>asset</th><th>side</th>
     <th>p_up</th><th>meta_p</th><th>ev</th><th>payout</th><th>mode</th><th>order</th></tr></thead>
@@ -370,15 +393,19 @@ async function refresh(){
   const assets=Object.keys(per).filter(a=>per[a].n>0);
   bars("wr", assets, assets.map(a=>100*per[a].w/per[a].n), GREEN, v=>v.toFixed(0)+"%");
 
-  const pays=(d.payouts||[]).slice(0,18);
-  bars("pay", pays.map(p=>p.asset), pays.map(p=>100*p.payout), AMBER2, v=>v.toFixed(0)+"%");
+  // Our tradable instruments only, frozen-universe members first.
+  const pays=(d.payouts||[]).slice().sort((a,b)=>(b.frozen-a.frozen)||(b.payout-a.payout));
+  bars("pay", pays.map(p=>p.asset+(p.frozen?"*":"")), pays.map(p=>100*p.payout),
+       AMBER2, v=>v.toFixed(0)+"%");
 
-  // ROI lever: break-even WR per trial-universe asset vs the 57% calibrated
-  // floor - the gap between bar top and the dashed line is the edge margin.
-  const trial=(d.payouts||[]).filter(p=>p.kind==="binary" && p.asset.endsWith("-op"))
-    .map(p=>({a:p.asset.replace("-op",""), be:100/(1+p.payout)}))
-    .sort((x,y)=>x.be-y.be).slice(0,18);
-  bars("roi", trial.map(t=>t.a), trial.map(t=>t.be), RED, v=>v.toFixed(1)+"%", 57);
+  // EDGE MARGIN, not raw break-even: (57% calibrated expectation - break-even).
+  // Raw break-even bars all sat at ~53.5% just under the line, which read as
+  // "no margin" when the decision-relevant quantity is the GAP itself.
+  const margin=pays.map(p=>({a:p.asset+(p.frozen?"*":""),
+                             m:57 - 100/(1+p.payout)}))
+    .sort((x,y)=>y.m-x.m);
+  bars("roi", margin.map(t=>t.a), margin.map(t=>t.m), GREEN,
+       v=>"+"+v.toFixed(2)+"pt");
 
   const rows = d.signals.slice(-25).reverse();
   el("recent").querySelector("tbody").innerHTML = rows.length ? rows
