@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from feature_cache import cached_build
 from features import build_features
 from instruments import INSTRUMENTS
 from research_pooled import XS_COLUMNS, add_cross_asset, currencies  # noqa: F401
@@ -400,7 +401,8 @@ def count_clusters(timestamps: list[int], purge_s: int) -> tuple[int, int]:
 
 
 def preflight(cutoff_ts: int, horizon: int, payout_fallback: float,
-              h2_glob: str = "h2-*.pkl", h4_glob: str = "h4-*.pkl") -> dict:
+              h2_glob: str = "h2-*.pkl", h4_glob: str = "h4-*.pkl",
+              use_cache: bool = True) -> dict:
     """Verdict-day readiness check that CANNOT produce a verdict.
 
     Answers "would the single permitted run work, and does it have the power
@@ -431,8 +433,11 @@ def preflight(cutoff_ts: int, horizon: int, payout_fallback: float,
         candles, _ = load_canonical_history(conn, asset, 60)
         if candles.empty:
             continue
-        ff = build_features(candles, interval=60, horizon=horizon,
-                            entry_next_open=True, extra_vol=True)
+        # Content-addressed cache: the key is a hash of the candle values, so
+        # a stale hit is impossible and repeated power counts are fast.
+        ff = cached_build(candles, asset, 60, horizon, use_cache=use_cache,
+                          entry_next_open=True, extra_vol=True)
+        ff = ff.copy()
         ff["asset"] = asset
         parts.append(ff)
     if not parts:
@@ -603,6 +608,10 @@ def main() -> None:
                         help="readiness + POWER check that reads no outcome and "
                         "therefore does NOT consume the single permitted "
                         "evaluation; reports counts only")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="rebuild features from scratch, bypassing the "
+                        "content-addressed cache (the cache key hashes the "
+                        "candle values, so this should never be necessary)")
     parser.add_argument("--h2-model", default="h2-*.pkl",
                         help="glob (relative to models/) selecting the H2 bundle. "
                         "The cutoff refusal advertised 'point at the pre-cutoff "
@@ -625,7 +634,8 @@ def main() -> None:
     if args.preflight:
         report["preflight"] = preflight(
             cutoff_ts, args.horizon, args.payout,
-            h2_glob=args.h2_model, h4_glob=args.h4_model)
+            h2_glob=args.h2_model, h4_glob=args.h4_model,
+            use_cache=not args.no_cache)
         print(json.dumps(report, indent=2))
         return
     if args.track in ("both", "candles"):
