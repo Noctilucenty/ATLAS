@@ -525,6 +525,41 @@ candle win rate is executable at all. It is a measurement with no pass/fail
 and is explicitly NOT bound by Rule 2's dates: it continues until it has an
 answer, and a verdict of any kind on H2/H3/H4 does not close it.
 
+## PREFLIGHT MEASUREMENT (2026-07-25T14:07Z) - counts only, NO outcome read
+
+`forward_eval.py --preflight` gates rows exactly as the real evaluation would
+but never touches label_up, so it consumes no part of the single permitted
+run. It exists because the POWER RULE's extension trigger is sample-size
+based and therefore needs a countable quantity. Scored window so far:
+2026-07-22T05:19Z (the H2 purge boundary) to 14:07Z on 07-25 = 3.37 days.
+
+| gate | independent | clusters | projected 08-05 |
+|---|---|---|---|
+| H2 primary (ev 0.03) | 69 | 9 | ~282 / ~37 |
+| H2 secondary (ev 0.04) | 51 | 6 | ~209 / ~25 |
+| ev 0.02 (reported) | 116 | 18 | ~474 / ~74 |
+| **H3 meta 0.60 (PRIMARY)** | **35** | **6** | **~143 / ~25** |
+| H3 meta 0.65 | 8 | 4 | ~33 / ~16 |
+| H3 meta 0.70 | 0 | 0 | 0 |
+| H3 meta 0.775 | 0 | 0 | 0 |
+
+READING. This REVISES the judge panel's power estimate upward: the panel
+extrapolated from the 20 live paper signals, whereas the candles track scores
+every bar and carries ~3.5x the volume. The primary hypothesis is projected to
+CLEAR the registered 20-cluster minimum (~25) but to fall SHORT of MinTRL 163
+at the 62% anchor (~143, about 88%). So H3 is marginal, not hopeless - and the
+pre-committed single extension to 2026-09-02 closes precisely that gap. No
+outcome informed this note.
+
+CONFIRMED ON BOTH TRACKS: the high meta operating points are empty. 0.70 and
+0.775 keep ZERO of 69 gated rows here, matching the live log's 0 of 20. The
+offline staircase that peaks at 80.9% has no volume at this scale, on either
+track. Any future registration leaning on a high meta threshold must pair it
+with breadth (item 4/8 in RESEARCH_QUEUE.md) or budget weeks per trade.
+
+ALSO MEASURED: 87,767 of 152,269 scored feature rows (58%) fall OUTSIDE the
+frozen 16-asset universe, consistent with the 60% figure from the live log.
+
 ## JUDGE PANEL + EVALUATOR CORRECTIONS (2026-07-25, before ANY verdict run)
 
 A four-lens independent panel (statistical integrity / adversarial referee /

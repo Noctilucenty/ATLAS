@@ -178,6 +178,23 @@ def main() -> int:  # noqa: C901
         if _call(client.get_balance_mode, timeout=30) != "PRACTICE":
             print("REFUSING: balance mode changed", file=sys.stderr)
             break
+
+        # THE QUOTE WE ACTUALLY SAW AT ORDER TIME. Our registered strike
+        # convention is the NEXT bar's open, but the order fills ~19 s into
+        # that bar, so "what we saw" and "what we assume" are different prices.
+        # Capturing the forming bar's close here gives the third leg of the
+        # comparison - displayed quote vs our assumed strike vs IQ's actual
+        # strike - which is what separates an order-time markup from a
+        # convention artefact. Without it a disagreement is unattributable.
+        quote_at_order = None
+        try:
+            live = _call(client.get_candles, spec.candle_asset, 60, 1,
+                         time.time(), timeout=20)
+            if live:
+                quote_at_order = float(live[-1]["close"])
+        except Exception:
+            pass  # never block the order on the diagnostic
+
         order_ts = int(time.time())
         try:
             ok_buy, order_id = _call(
@@ -196,6 +213,7 @@ def main() -> int:  # noqa: C901
             "amount": AMOUNT,
             "signal_bar_to_ts": int(signal_bar["to"]),
             "signal_bar_close": float(signal_bar["close"]),
+            "quote_at_order": quote_at_order,
             "decision_latency_s": order_ts - int(signal_bar["to"]),
             "order_id": order_id if ok_buy else None,
         }
@@ -262,6 +280,16 @@ def _settle(client, call, rows: list[dict]) -> int:
             out["candle_exercise"] = exercise
             out["candle_label"] = label_from_prices(strike, exercise,
                                                    record["direction"])
+            # Convention cost: how far our assumed strike sat from the quote
+            # actually on screen when the order went in. A large value here
+            # means a disagreement is OUR convention, not IQ's markup - the
+            # distinction the whole measurement rests on. Pip = 1e-4, or 1e-2
+            # for JPY crosses and gold.
+            q = record.get("quote_at_order")
+            if isinstance(q, (int, float)):
+                pip = 0.01 if ("JPY" in record["asset"]
+                               or record["asset"].startswith("XAU")) else 0.0001
+                out["convention_gap_pips"] = round((strike - q) / pip, 3)
         if outcome:
             out["broker_result"], out["broker_profit"] = outcome
             settled += 1
