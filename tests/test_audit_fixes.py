@@ -33,6 +33,32 @@ def test_last_log_entry_missing_file_is_none(tmp_path):
     assert mc.last_log_entry(tmp_path / "nope.log") == (None, "")
 
 
+def test_partial_sidecar_failure_is_not_flagged(tmp_path):
+    """Quoted-hours assets are shut every weekend, so failed>=1 with other
+    assets stored is normal. Flagging it would cry wolf permanently."""
+    import datetime as _dt
+
+    p = tmp_path / "extra.log"
+    p.write_text("[2026-07-25T03:05:00Z] stored=5 (SpaceX-OTC:239) "
+                 "failed=1 (SpaceX-op[SchemaError])\n")
+    now = int(_dt.datetime(2026, 7, 25, 3, 30,
+                           tzinfo=_dt.timezone.utc).timestamp())
+    out = mc.sidecar_health(now, {"extra": (p, 3600)})
+    assert out["extra"]["failed"] is False
+    assert out["extra"]["stale"] is False
+
+
+def test_total_sidecar_failure_is_flagged(tmp_path):
+    import datetime as _dt
+
+    p = tmp_path / "extra.log"
+    p.write_text("[2026-07-25T03:05:00Z] stored=0 () failed=6 (all of them)\n")
+    now = int(_dt.datetime(2026, 7, 25, 3, 30,
+                           tzinfo=_dt.timezone.utc).timestamp())
+    out = mc.sidecar_health(now, {"extra": (p, 3600)})
+    assert out["extra"]["failed"] is True
+
+
 def test_sidecar_health_flags_stale_and_failed(tmp_path):
     fresh = tmp_path / "fresh.log"
     old = tmp_path / "old.log"

@@ -256,13 +256,20 @@ def sidecar_health(now: int, sidecars: dict | None = None) -> dict:
         # the process started caring; treat a missing log as stale so a
         # sidecar that never fires cannot hide.
         stale = age is None or age > cadence_s * SIDECAR_STALE_FACTOR
+        # PARTIAL failure is normal and permanent: quoted-hours assets
+        # (SpaceX-op, the real-feed indices) are shut outside their windows,
+        # so every weekend cycle reports failed>=1. Flagging that trains the
+        # operator to ignore the banner - exactly the alert fatigue that
+        # hides a real outage. Only a TOTAL failure (stored=0) or the
+        # exception barrier's explicit FAILED marker counts.
+        stored = re.search(r"stored=(\d+)", line)
         out[name] = {
             "last_ts": ts,
             "age_s": age,
             "cadence_s": cadence_s,
             "stale": stale,
-            "failed": ("FAILED" in line) or ("failed=" in line
-                                             and "failed=0" not in line),
+            "failed": ("FAILED" in line)
+                      or (stored is not None and int(stored.group(1)) == 0),
             "last_line": line[-160:],
         }
     return out
