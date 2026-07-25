@@ -411,6 +411,76 @@ delay the next runner start; experiments.py id assignment is racy under
 concurrent training runs; validation does not reject misaligned bar
 spacing (feeds are aligned in practice).
 
+## SECOND pre-verdict audit (2026-07-24, Windows host) - findings recorded, NO criteria changed
+
+A four-dimension adversarial code audit (leakage / verdict readiness /
+config fidelity / data integrity, every finding attacked by an independent
+skeptic) ran while the window was still verdict-free. 11 findings confirmed,
+11 refuted. NOTHING below has been acted on: no model was rebuilt, no
+threshold moved, no payout semantics changed. The record exists so that
+whatever is decided later provably predates any result.
+
+BLOCKING - the frozen models are contaminated and the evaluator refuses them:
+- models/h2-20260722.pkl has data_end_ts 2026-07-22T05:04Z; the registered
+  cutoff is 2026-07-22T00:00Z. It trained on the first 5.07h of the forward
+  window. models/h4-20260722.pkl: 2026-07-22T17:32Z, 17.53h inside.
+  (Verified by reading the pickles directly. This also contradicts the H2
+  in-sample line above, "data ..2026-07-21": the row count matches the
+  pickle exactly, 1,105,496, but the data end does not.)
+- models/meta-h3.pkl carries NO data_end_ts, so the guard cannot check the
+  PRIMARY hypothesis's model at all.
+- load_bundle's cutoff guard (written by the first audit for exactly this)
+  correctly refuses both. It sits on the first line of candles_track, so the
+  documented verdict-day command aborted with one stderr line and no output.
+  Its message advises "point at the pre-cutoff pickle explicitly" but no such
+  option existed, no pre-cutoff pickle exists on disk or in git, and no code
+  path can build one (research_pooled.load_pooled takes no cutoff argument).
+- Contamination bound by elapsed time: ~1.5% of a 14-day window for H2,
+  ~5.2% for H4.
+
+EVALUATOR DEFECTS FOUND, DELIBERATELY NOT FIXED (both would make PASSING
+EASIER, so they are the operator's call, not a maintainer's):
+- observed_payout() reads spec.option_kind, which is 'turbo' for 24 of the
+  tradable instruments, while the contract traded and the frozen config
+  ("binary-kind payout") are BINARY. Measured on collected snapshots: binary
+  pays +0.0223 over turbo on average, moving break-even from 0.5412 (as
+  coded) to 0.5348 (as registered) - 0.64pt on a test whose margin is a few
+  points.
+- MIN_CLUSTERS_CANDLES = 30 while H2/H3/H4 are registered at ">= 20
+  clusters" (the >= 30 in the Protocol section belongs to H1). As coded the
+  candles track is stricter than registered.
+- paper_track applies no frozen-universe filter, so its registered verdicts
+  would include post-registration instruments (candles_track does filter).
+
+LIVE-EXECUTION FIDELITY (affects signals already logged):
+- The runner computes cross-asset currency-strength features over the live
+  39-instrument basket; the frozen model was trained on 16. Measured shift
+  in xs_mkt_vol: 42%. Every signal logged since 2026-07-24 carries
+  out-of-distribution cross-asset columns.
+- live_h2_runner's model loader has no post-cutoff refusal, so a retrain
+  would silently swap a contaminated model into the live window.
+
+CHANGES ACTUALLY MADE (criteria-neutral, ergonomics only):
+- forward_eval gained --h2-model/--h4-model globs, implementing the remedy
+  the refusal message already advertised. The post-cutoff guard still
+  applies to whatever bundle is selected; it cannot be bypassed.
+- A candles-track SystemExit no longer takes the leak-immune paper track
+  down with it; the failure is reported inside the JSON report instead.
+
+OPEN DECISIONS (owner: operator):
+1. The contaminated models. Options considered: (a) move the registered
+   cutoff to 2026-07-22T17:32Z - excludes every contaminated hour, touches
+   no artifact, costs ~5% of the window, moves the boundary in the
+   conservative direction; (b) rebuild H2/H4 strictly pre-cutoff - needs a
+   ~60-day backfill and an until_ts on load_pooled, and yields a model that
+   is NOT the one that generated the live signals; (c) proceed with
+   disclosure.
+2. Whether to correct the payout-kind and cluster-threshold defects above.
+   Both loosen the test, so correcting them after results exist would be
+   indefensible; correcting them now, before any verdict, is the only
+   honest window - or they stand as coded and the verdict is read with this
+   record attached.
+
 ## Notes
 
 - Real execution frictions (spread at entry, expiry timing, requotes) are

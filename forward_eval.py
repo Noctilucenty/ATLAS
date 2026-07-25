@@ -170,8 +170,9 @@ def meta_probabilities(meta_bundle, frame: pd.DataFrame, p_up, actions) -> np.nd
     return meta_bundle["model"].predict_proba(feats[meta_bundle["features"]])[:, 1]
 
 
-def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:  # noqa: C901
-    model_name, bundle = load_bundle("h2-*.pkl", cutoff_ts)
+def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa: C901
+                  h2_glob: str = "h2-*.pkl", h4_glob: str = "h4-*.pkl") -> dict:
+    model_name, bundle = load_bundle(h2_glob, cutoff_ts)
     model, meta = bundle["model"], bundle["meta"]
     _, meta_bundle = load_bundle("meta-h3.pkl", cutoff_ts)
     feature_cols = meta["feature_columns"]
@@ -270,7 +271,7 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float) -> dict:
 
     # H4 (registered): the extra-vol model at the primary gate.
     try:
-        h4_name, h4_bundle = load_bundle("h4-*.pkl", cutoff_ts)
+        h4_name, h4_bundle = load_bundle(h4_glob, cutoff_ts)
         h4_cols = h4_bundle["meta"]["feature_columns"]
         p4 = h4_bundle["model"].predict_proba_up(forward[h4_cols])
         trades = []
@@ -360,6 +361,13 @@ def main() -> None:
                         help="assumed payout for the candles track (paper track uses "
                         "the payout actually quoted at signal time)")
     parser.add_argument("--track", choices=("both", "candles", "paper"), default="both")
+    parser.add_argument("--h2-model", default="h2-*.pkl",
+                        help="glob (relative to models/) selecting the H2 bundle. "
+                        "The cutoff refusal advertised 'point at the pre-cutoff "
+                        "pickle explicitly' but offered no way to do it; the "
+                        "post-cutoff guard still applies to whatever is chosen.")
+    parser.add_argument("--h4-model", default="h4-*.pkl",
+                        help="glob (relative to models/) selecting the H4 bundle")
     args = parser.parse_args()
 
     cutoff_ts = int(
@@ -369,9 +377,20 @@ def main() -> None:
         "run_utc": datetime.now(timezone.utc).isoformat(),
         "cutoff": args.cutoff,
         "horizon_bars": args.horizon,
+        "h2_model_glob": args.h2_model,
+        "h4_model_glob": args.h4_model,
     }
     if args.track in ("both", "candles"):
-        report["candles_track"] = candles_track(cutoff_ts, args.horizon, args.payout)
+        # The paper track is leak-immune and independent, so a candles-track
+        # failure (e.g. the cutoff guard refusing a contaminated bundle) must
+        # not silently take it down with it (audit 2026-07-24, pre-verdict).
+        try:
+            report["candles_track"] = candles_track(
+                cutoff_ts, args.horizon, args.payout,
+                h2_glob=args.h2_model, h4_glob=args.h4_model,
+            )
+        except SystemExit as exc:
+            report["candles_track"] = {"error": str(exc)}
     if args.track in ("both", "paper"):
         report["paper_track"] = paper_track(args.horizon)
     print(json.dumps(report, indent=2))
