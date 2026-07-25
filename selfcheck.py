@@ -130,11 +130,15 @@ def check_models(rep: Report) -> None:
         end = meta.get("data_end_ts")
         if end is None:
             rep.warn(f"model {path.name}",
-                     f"sha {digest}, NO data_end_ts (cutoff guard cannot check it)")
+                     f"sha {digest}, NO data_end_ts (provenance unverifiable)")
         elif end > cutoff:
-            rep.warn(f"model {path.name}",
-                     f"sha {digest}, trained {(end - cutoff)/3600:.2f}h PAST cutoff "
-                     "(forward_eval will refuse it - see FORWARD_TEST.md)")
+            # No longer a refusal: forward_eval purges each bundle to
+            # data_end_ts + one label horizon instead, which is tighter.
+            purged = datetime.fromtimestamp(
+                end + 15 * 60, timezone.utc).strftime("%m-%d %H:%MZ")
+            rep.ok(f"model {path.name}",
+                   f"sha {digest}, trained {(end - cutoff)/3600:.2f}h past cutoff "
+                   f"-> scoring purged to {purged}")
         else:
             rep.ok(f"model {path.name}", f"sha {digest}, pre-cutoff")
 
