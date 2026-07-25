@@ -97,6 +97,76 @@ overfitting, not skill. RE-MEASURE this baseline after the cross-asset basket
 repair - erratic xs_mkt_vol from the 39-asset basket was feeding the model
 out-of-distribution columns, so the level and variance may shift.
 
+## EXTERNAL DEEP RESEARCH (2026-07-25, Perplexity Advanced Deep Research)
+
+Full answer in logs/deep_research_wr.txt, raw in logs/deep_research_raw.json
+(both gitignored). Cited throughout; the items below are the ones that change
+what we should do. Several CONTRADICT plans we were considering.
+
+**1. Calibration cannot rescue this, and the arithmetic says why.** Brier
+skill versus a constant 0.25 forecast is 1 - 0.2494/0.25 = **0.24%**. Murphy's
+decomposition (BS = reliability - resolution + uncertainty) means recalibration
+lowers RELIABILITY error only; resolution rises solely from new information, a
+better target, or better features. So no calibration method can manufacture
+0.55-0.65 forecasts we do not already have. This kills "improve confidence by
+recalibrating" as a strategy - the confidence ceiling is a resolution problem.
+
+**2. The single highest-value change is the TARGET, not the model:** train and
+validate against the broker's actual strike and expiry-settlement rule rather
+than mid-price direction. Which turns out to be sharper than we assumed -
+
+**3. SETTLEMENT IS PROBABLY NOT A SINGLE CLOSE.** Nadex (a regulated venue,
+published methodology) computes FX expiration value from the last TEN
+midpoints before expiry, discards the highest three and lowest three, and
+averages the remaining four. If IQ does anything comparable, our label - the
+close of the bar 15 bars on - is structurally wrong INDEPENDENTLY of any
+markup, and a disagreement would be an averaging artefact, not evidence of
+cheating. => probe_execution.py must capture several quotes around expiry, not
+just the settlement bar's close, or it will misattribute the result. This is
+the most concrete actionable finding in the whole report.
+
+**4. Rejected with evidence (do not implement):** focal loss is NOT strictly
+proper - its minimiser need not equal the true posterior - and on CIFAR-10 it
+improved ECE 4.35%->1.48% while WORSENING error 4.95%->5.25%. Label smoothing
+likewise shrinks the usable high-confidence tail. Standard split conformal is
+invalid here: it assumes exchangeability, which serial dependence and regime
+shifts violate, and treating singleton prediction sets as trades does NOT
+guarantee the singleton subset achieves the nominal level.
+
+**5. Venn-Abers is the one calibration method worth testing** (largest average
+log-loss reduction in a 2026 tabular benchmark, beta calibration close behind)
+- but explicitly "cannot create tail observations or improve their rank". It
+makes the EV gate HONEST; it does not add trades. Use cross-Venn-Abers pooled
+across instruments, never another small per-pair isotonic fit.
+
+**6. Feature families worth testing post-verdict, all computable from 1m OHLC**
+and none on the graveyard list: close-location value and wick imbalance;
+path efficiency ER_k = |sum r| / sum|r| with sign-change counts and run
+lengths; signed semivariance imbalance (RS+ - RS-)/(RS+ + RS-); range-surprise
+x close-location interaction; cross-pair currency residuals. Honest caveat
+from the report: no published work shows a stable 57-65% out-of-sample win
+rate for 15-minute FX binaries from 1m OHLC after settlement effects - the
+nearest credible intraday-FX evidence sits at 51-60%.
+
+**7. Our power arithmetic may be optimistic.** A Bernoulli SPRT against
+p0 = 0.53476 needs roughly 760 independent trades to accept p = 0.57, and ~220
+at p = 0.60 - versus MinTRL 163. At ~6 signals/day that is ~127 active trading
+days. Overlapping expiries extend it further.
+
+**8. A better instrument than our one pre-committed extension exists:**
+confidence sequences / e-processes (beta-binomial mixture likelihood ratio
+against p <= 0.53476, updated per independent expiry cluster) are ALWAYS-VALID
+under continuous monitoring - P(p_tau <= alpha) <= alpha at every stopping
+time. That permits legitimate continuous monitoring rather than a single
+pre-committed extension date. Cannot replace the registered criteria for THIS
+window, but is the right design for the next registration.
+
+**9. Selecting the best of 39 instruments each minute IS a selection effect.**
+The report warns the maximum of 39 noisy probabilities must not be mistaken
+for confidence, and that the whole policy including asset choice should be
+evaluated per timestamp. Directly relevant: our max_conf dashboard metric is
+exactly that maximum.
+
 ## Standing constraints
 
 - One machine per account; Windows host owns the demo account now.
