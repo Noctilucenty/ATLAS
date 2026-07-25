@@ -72,6 +72,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--order-id", type=int)
     ap.add_argument("--limit", type=int, default=50)
+    ap.add_argument("--days", type=int, default=7,
+                    help="how far back to search position history (default 7)")
     ap.add_argument("--list", action="store_true",
                     help="list order records already captured")
     args = ap.parse_args()
@@ -101,18 +103,42 @@ def main() -> int:
     if not ok:
         raise SystemExit(f"login failed: {reason}")
 
-    record = {"order_id": order_id}
+    import time
+
+    now = int(time.time())
+    start = now - args.days * 86400
+    record = {"order_id": order_id, "captured_utc": now}
+
+    # Only APIs verified to RESPOND on this account (probed 2026-07-25):
+    # get_optioninfo_v2, get_position_history v1 and get_positions all time
+    # out, so they are not attempted. position_history_v2 is the most likely
+    # carrier of the strike/expiry quotes we actually want.
+    for instrument_type in ("binary-option", "turbo-option"):
+        key = f"position_history_v2:{instrument_type}"
+        try:
+            res = _call(client.get_position_history_v2, instrument_type,
+                        args.limit, 0, start, now, timeout=60)
+            record[key] = res[1] if isinstance(res, tuple) and len(res) == 2 else res
+        except Exception as exc:
+            record[key + "_error"] = f"{type(exc).__name__}: {exc}"
     try:
-        record["optioninfo_v2"] = _call(client.get_optioninfo_v2, args.limit,
-                                        timeout=90)
+        record["optioninfo_v1"] = _call(client.get_optioninfo, args.limit,
+                                        timeout=60)
     except Exception as exc:
-        record["optioninfo_v2_error"] = f"{type(exc).__name__}: {exc}"
+        record["optioninfo_v1_error"] = f"{type(exc).__name__}: {exc}"
     try:
         ok_bet, bet = _call(client.get_betinfo, order_id, timeout=60)
         record["betinfo_ok"] = bool(ok_bet)
         record["betinfo"] = bet
     except Exception as exc:
         record["betinfo_error"] = f"{type(exc).__name__}: {exc}"
+    # The position/order pair can carry fill detail the history summary omits.
+    try:
+        ok_ord, order = _call(client.get_order, order_id, timeout=60)
+        record["order_ok"] = bool(ok_ord)
+        record["order"] = order
+    except Exception as exc:
+        record["order_error"] = f"{type(exc).__name__}: {exc}"
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUT_DIR / f"{order_id}.json"
