@@ -23,7 +23,11 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 SEARCH_URL = "https://api.perplexity.ai/search"
 AGENT_URL = "https://api.perplexity.ai/v1/responses"
-TIMEOUT_S = 90
+# Advanced Deep Research runs multi-step sourcing and routinely takes several
+# minutes; the old 90 s ceiling killed it mid-flight and surfaced as a bare
+# socket timeout. Search stays fast, so the two get different budgets.
+SEARCH_TIMEOUT_S = 90
+AGENT_TIMEOUT_S = 1800
 
 
 def load_key() -> str | None:
@@ -41,7 +45,8 @@ def load_key() -> str | None:
     return None
 
 
-def _post(url: str, payload: dict, key: str) -> dict:
+def _post(url: str, payload: dict, key: str,
+          timeout: int = SEARCH_TIMEOUT_S) -> dict:
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
@@ -50,7 +55,7 @@ def _post(url: str, payload: dict, key: str) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")[:400]
@@ -63,7 +68,8 @@ def _post(url: str, payload: dict, key: str) -> dict:
 def search(query: str, key: str, max_results: int = 5,
            max_tokens_per_page: int = 512) -> dict:
     return _post(SEARCH_URL, {"query": query, "max_results": max_results,
-                              "max_tokens_per_page": max_tokens_per_page}, key)
+                              "max_tokens_per_page": max_tokens_per_page},
+                 key, timeout=SEARCH_TIMEOUT_S)
 
 
 # Presets accepted by /v1/responses. "fast-search" is cheap and shallow;
@@ -71,16 +77,67 @@ def search(query: str, key: str, max_results: int = 5,
 # what a question like broker strike mechanics actually needs. The exact
 # preset names are Perplexity's, so they are passed through rather than
 # hardcoded to one guess - --preset takes whatever their docs list.
-DEEP_PRESET = "deep-research"
+DEEP_PRESET = "advanced-deep-research"   # the console's "Advanced Deep Research"
 FAST_PRESET = "fast-search"
 
 
 def ask(prompt: str, key: str, preset: str = DEEP_PRESET,
-        model: str | None = None) -> dict:
+        model: str | None = None, timeout: int = AGENT_TIMEOUT_S) -> dict:
     payload: dict = {"preset": preset, "input": prompt}
     if model:
         payload["model"] = model
-    return _post(AGENT_URL, payload, key)
+    return _post(AGENT_URL, payload, key, timeout=timeout)
+
+
+def format_agent(payload: dict) -> str:
+    """Pull the written answer and its sources out of a /v1/responses reply.
+
+    The raw object interleaves search queries, per-result snippets and the
+    final message; dumping it is unreadable, and the snippets are often
+    non-English pages that crowd out the actual answer. Pure - unit-tested."""
+    if not isinstance(payload, dict):
+        return str(payload)[:2000]
+    if payload.get("error"):
+        return f"API error: {payload['error']}"
+
+    texts, sources = [], []
+    for item in payload.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for res in item.get("results") or []:
+            if isinstance(res, dict) and res.get("url"):
+                sources.append((res.get("title") or "", res["url"]))
+        content = item.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and isinstance(c.get("text"), str):
+                    texts.append(c["text"])
+                elif isinstance(c, str):
+                    texts.append(c)
+        elif isinstance(item.get("text"), str):
+            texts.append(item["text"])
+
+    out = []
+    if texts:
+        out.append("\n\n".join(t.strip() for t in texts if t.strip()))
+    else:
+        out.append("(no written answer in the response; model="
+                   f"{payload.get('model')}, status={payload.get('status')})")
+    if sources:
+        seen, lines = set(), []
+        for title, url in sources:
+            if url in seen:
+                continue
+            seen.add(url)
+            lines.append(f"  - {title[:80]} {url}" if title else f"  - {url}")
+        out.append(f"\nSOURCES ({len(seen)}):\n" + "\n".join(lines[:25]))
+    usage = payload.get("usage") or {}
+    if usage:
+        out.append(f"\n[model={payload.get('model')} "
+                   f"tokens={usage.get('total_tokens', '?')}]")
+    return "\n".join(out)
 
 
 def format_search(payload: dict) -> str:
@@ -135,9 +192,10 @@ def main() -> int:
     preset = FAST_PRESET if args.fast else args.preset
     payload = (ask(q, key, preset=preset, model=args.model) if args.agent
                else search(q, key, args.max_results))
-    print(json.dumps(payload, indent=2) if args.json
-          else (json.dumps(payload, indent=2)[:4000] if args.agent
-                else format_search(payload)))
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(format_agent(payload) if args.agent else format_search(payload))
     return 0
 
 
