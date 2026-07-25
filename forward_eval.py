@@ -380,6 +380,122 @@ def candles_track(cutoff_ts: int, horizon: int, payout_fallback: float,  # noqa:
     return out
 
 
+def count_clusters(timestamps: list[int], purge_s: int) -> tuple[int, int]:
+    """(independent trades, cross-asset clusters) from TIMESTAMPS ALONE.
+
+    Deliberately outcome-blind: it never sees a label, so it can be run before
+    verdict day without consuming the single permitted evaluation. Mirrors
+    cluster_stats' chaining rule. Pure - unit-tested."""
+    if not timestamps:
+        return 0, 0
+    ts_sorted = sorted(timestamps)
+    clusters, end = 0, None
+    for ts in ts_sorted:
+        if end is not None and ts < end:
+            end = max(end, ts + purge_s)
+        else:
+            clusters += 1
+            end = ts + purge_s
+    return len(ts_sorted), clusters
+
+
+def preflight(cutoff_ts: int, horizon: int, payout_fallback: float,
+              h2_glob: str = "h2-*.pkl", h4_glob: str = "h4-*.pkl") -> dict:
+    """Verdict-day readiness check that CANNOT produce a verdict.
+
+    Answers "would the single permitted run work, and does it have the power
+    to mean anything?" without ever reading an outcome: it loads the bundles,
+    applies the per-model purge, gates rows exactly as the real evaluation
+    would, and reports COUNTS ONLY. label_up is never touched, so no win rate,
+    p-value or verdict can be computed from this - and the PRE-COMMITTED POWER
+    RULE's extension trigger is sample-size-based, which is precisely what
+    this measures.
+    """
+    out: dict = {"mode": "PREFLIGHT - counts only, no outcomes read",
+                 "registration_cutoff_utc": datetime.fromtimestamp(
+                     cutoff_ts, timezone.utc).isoformat()}
+    try:
+        h2_name, bundle = load_bundle(h2_glob, cutoff_ts, purge=True)
+        meta = bundle["meta"]
+        _, meta_bundle = load_bundle("meta-h3.pkl", cutoff_ts, purge=True)
+    except SystemExit as exc:
+        return {**out, "blocked": str(exc)}
+    h2_start = model_forward_start(meta, cutoff_ts, horizon)
+    out["h2_model"] = h2_name
+    out["h2_scoring_start_utc"] = datetime.fromtimestamp(
+        h2_start, timezone.utc).isoformat()
+
+    conn = open_db()
+    parts = []
+    for asset in INSTRUMENTS:
+        candles, _ = load_canonical_history(conn, asset, 60)
+        if candles.empty:
+            continue
+        ff = build_features(candles, interval=60, horizon=horizon,
+                            entry_next_open=True, extra_vol=True)
+        ff["asset"] = asset
+        parts.append(ff)
+    if not parts:
+        return {**out, "blocked": "no candles in the store"}
+    pooled = (pd.concat(parts, ignore_index=True)
+              .sort_values("to_ts", kind="stable").reset_index(drop=True))
+    pooled = add_cross_asset(pooled)
+    # NOTE: no dropna on label_up here - unresolved bars are counted as
+    # pending rather than silently dropped, and no label is ever read.
+    forward = pooled[pooled["to_ts"] > h2_start]
+    frozen = set(meta["assets"])
+    out["frozen_universe_size"] = len(frozen)
+    out["rows_out_of_universe"] = int((~forward["asset"].isin(frozen)).sum())
+    forward = forward[forward["asset"].isin(frozen)].reset_index(drop=True)
+    out["forward_rows_in_universe"] = len(forward)
+    if forward.empty:
+        return {**out, "blocked": "no forward rows inside the frozen universe"}
+
+    p_up = bundle["model"].predict_proba_up(forward[meta["feature_columns"]])
+    purge_s = horizon * 60
+    gates = {"h2_primary": H2_PRIMARY_MARGIN,
+             "h2_secondary": H2_SECONDARY_MARGIN,
+             "h2_ev02_reported": 0.02}
+    for label, margin in gates.items():
+        idx = [i for i, p in enumerate(p_up)
+               if decide_action(float(p), payout_fallback, margin) != "no_trade"]
+        ind, clus = count_clusters(
+            [int(forward.iloc[i]["to_ts"]) for i in idx], purge_s)
+        out[label] = {"gated_rows": len(idx), "independent": ind,
+                      "clusters": clus,
+                      "meets_min_clusters": clus >= MIN_CLUSTERS_CANDLES,
+                      "meets_mintrl_62": ind >= MINTRL_AT_62}
+
+    # H3 family: counts of survivors per threshold, still outcome-blind.
+    actions = [decide_action(float(p), payout_fallback, H2_PRIMARY_MARGIN)
+               for p in p_up]
+    idx = [i for i, a in enumerate(actions) if a != "no_trade"]
+    if idx:
+        sub = forward.iloc[idx].reset_index(drop=True)
+        meta_p = meta_probabilities(meta_bundle, sub, [p_up[i] for i in idx],
+                                    [actions[i] for i in idx])
+        for thr in H3_META_THRESHOLDS:
+            keep = [i for j, i in enumerate(idx) if meta_p[j] >= thr]
+            ind, clus = count_clusters(
+                [int(forward.iloc[i]["to_ts"]) for i in keep], purge_s)
+            out[f"h3_meta{int(thr * 100)}"] = {
+                "kept": f"{len(keep)}/{len(idx)}", "independent": ind,
+                "clusters": clus,
+                "meets_min_clusters": clus >= MIN_CLUSTERS_CANDLES,
+                "meets_mintrl_62": ind >= MINTRL_AT_62}
+
+    primary = out.get(f"h3_meta{int(H3_META_THRESHOLD * 100)}", {})
+    out["power_rule"] = {
+        "primary_hypothesis": f"h3_meta{int(H3_META_THRESHOLD * 100)}",
+        "min_clusters_required": MIN_CLUSTERS_CANDLES,
+        "mintrl_at_62_anchor": MINTRL_AT_62,
+        "extension_would_trigger": not primary.get("meets_min_clusters", False),
+        "note": "extension trigger is SAMPLE SIZE only (FORWARD_TEST.md "
+                "PRE-COMMITTED POWER RULE, Rule 2); no outcome was read here",
+    }
+    return out
+
+
 def _frozen_assets() -> set[str]:
     """The instruments the deployed H2 bundle was trained on, from its own
     meta['assets']. Empty set if unavailable (then no filter is applied and
@@ -483,6 +599,10 @@ def main() -> None:
                         help="assumed payout for the candles track (paper track uses "
                         "the payout actually quoted at signal time)")
     parser.add_argument("--track", choices=("both", "candles", "paper"), default="both")
+    parser.add_argument("--preflight", action="store_true",
+                        help="readiness + POWER check that reads no outcome and "
+                        "therefore does NOT consume the single permitted "
+                        "evaluation; reports counts only")
     parser.add_argument("--h2-model", default="h2-*.pkl",
                         help="glob (relative to models/) selecting the H2 bundle. "
                         "The cutoff refusal advertised 'point at the pre-cutoff "
@@ -502,6 +622,12 @@ def main() -> None:
         "h2_model_glob": args.h2_model,
         "h4_model_glob": args.h4_model,
     }
+    if args.preflight:
+        report["preflight"] = preflight(
+            cutoff_ts, args.horizon, args.payout,
+            h2_glob=args.h2_model, h4_glob=args.h4_model)
+        print(json.dumps(report, indent=2))
+        return
     if args.track in ("both", "candles"):
         # The paper track is leak-immune and independent, so a candles-track
         # failure (e.g. the cutoff guard refusing a contaminated bundle) must
