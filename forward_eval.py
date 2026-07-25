@@ -29,6 +29,7 @@ window, so it is 0.0125, not 0.05.
 import argparse
 import json
 import pickle
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -392,13 +393,18 @@ def main() -> None:
         # The paper track is leak-immune and independent, so a candles-track
         # failure (e.g. the cutoff guard refusing a contaminated bundle) must
         # not silently take it down with it (audit 2026-07-24, pre-verdict).
+        # Catch Exception too, not just SystemExit: ANY candles-track failure
+        # must be contained, because the paper track is independent and
+        # leak-immune. (A NameError in the guard's own warning branch once
+        # took the whole evaluation down - audit 2026-07-25.)
         try:
             report["candles_track"] = candles_track(
                 cutoff_ts, args.horizon, args.payout,
                 h2_glob=args.h2_model, h4_glob=args.h4_model,
             )
-        except SystemExit as exc:
-            report["candles_track"] = {"error": str(exc)}
+        except (SystemExit, Exception) as exc:
+            report["candles_track"] = {
+                "error": f"{type(exc).__name__}: {exc}"}
     if args.track in ("both", "paper"):
         report["paper_track"] = paper_track(args.horizon)
     print(json.dumps(report, indent=2))
