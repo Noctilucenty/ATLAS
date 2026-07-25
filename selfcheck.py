@@ -25,6 +25,9 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 TASKS = ["ATLAS-supervisor", "ATLAS-watchdog", "ATLAS-extra-collect",
          "ATLAS-catchup", "ATLAS-backup"]
+# Suppress the console window Windows would create for each console child
+# (schtasks, git, pytest) when this runs from a windowless host.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BACKUP_DIR = Path.home() / "OneDrive" / "Desktop" / "ATLAS-evidence-backup"
 MIN_FREE_GB = 5.0
 BACKUP_MAX_AGE_H = 14.0     # 6h cadence + generous slack
@@ -58,7 +61,8 @@ def check_tasks(rep: Report) -> None:
         try:
             out = subprocess.run(
                 ["schtasks", "/query", "/tn", name, "/v", "/fo", "LIST"],
-                capture_output=True, text=True, timeout=20)
+                capture_output=True, text=True, timeout=20,
+                creationflags=NO_WINDOW)
         except Exception as exc:
             rep.warn(f"task {name}", f"unreadable: {type(exc).__name__}")
             continue
@@ -185,7 +189,8 @@ def check_backup(rep: Report) -> None:
 def check_git(rep: Report) -> None:
     def git(*args):
         return subprocess.run(["git", *args], cwd=PROJECT_DIR,
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, timeout=30,
+                              creationflags=NO_WINDOW)
     try:
         dirty = git("status", "--porcelain").stdout.strip()
         git("fetch", "--quiet", "origin", "main")
@@ -212,7 +217,7 @@ def check_tests(rep: Report) -> None:
     try:
         out = subprocess.run([str(exe), "-m", "pytest", "-q"],
                              cwd=PROJECT_DIR, capture_output=True, text=True,
-                             timeout=600)
+                             timeout=600, creationflags=NO_WINDOW)
     except Exception as exc:
         rep.warn("tests", f"could not run: {type(exc).__name__}")
         return

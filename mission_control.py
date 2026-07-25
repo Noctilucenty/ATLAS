@@ -49,6 +49,13 @@ SIDECARS = {
 SIDECAR_STALE_FACTOR = 2.5
 LOG_STAMP_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\]")
 
+# A scheduled task launched with pythonw.exe has NO console, so Windows
+# creates one for every console child it spawns - schtasks, powershell, git -
+# and the user sees a black window flash. The watchdog runs every 15 minutes,
+# so that is 96 flashes a day. CREATE_NO_WINDOW suppresses them; the flag does
+# not exist off Windows, hence the getattr default of 0.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # Pre-registered verdict set - DISPLAY ONLY, never evaluated here.
 REGISTERED_SET = ("H2p ev0.03", "H2s ev0.04", "H3 meta0.60", "H4")
 
@@ -191,6 +198,7 @@ def scheduled_task_state(task_name: str = TASK_NAME) -> dict:
         out = subprocess.run(
             ["schtasks", "/query", "/tn", task_name, "/v", "/fo", "LIST"],
             capture_output=True, text=True, timeout=15,
+            creationflags=NO_WINDOW,
         )
     except Exception as exc:  # schtasks missing = not Windows; report unknown
         return {"exists": None, "error": f"{type(exc).__name__}: {exc}"}

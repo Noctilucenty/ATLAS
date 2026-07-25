@@ -32,6 +32,11 @@ from instruments import INSTRUMENTS
 PROJECT_DIR = Path(__file__).resolve().parent
 PYTHON = sys.executable  # the venv's interpreter, whatever the OS
 LOG = PROJECT_DIR / "logs"
+# Keep children windowless. Under the S4U scheduled task there is no visible
+# desktop anyway, but run by hand - or if the task is ever re-registered
+# interactively - each collector and runner launch would flash a console.
+# Absent off Windows, so the default is 0.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _stamp() -> str:
@@ -54,12 +59,14 @@ def collect_cycle() -> None:
         r = subprocess.run(
             [PYTHON, "collector.py", "candles", *assets, "--interval", "60", "--hours", "2"],
             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=1200,
+            creationflags=NO_WINDOW,
         )
         log(f"collect candles exit={r.returncode}"
             + ("" if r.returncode == 0 else f" stderr={r.stderr[-200:]}"))
         r2 = subprocess.run(
             [PYTHON, "collector.py", "payouts"],
             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
+            creationflags=NO_WINDOW,
         )
         log(f"collect payouts exit={r2.returncode}")
     except Exception as exc:
@@ -91,7 +98,8 @@ def main() -> None:
             if runner is None or runner.poll() is not None:
                 if runner is not None:
                     log(f"runner exited ({runner.returncode}); relaunching")
-                runner = subprocess.Popen(runner_cmd, cwd=PROJECT_DIR)
+                runner = subprocess.Popen(runner_cmd, cwd=PROJECT_DIR,
+                                          creationflags=NO_WINDOW)
                 log(f"runner launched pid={runner.pid}")
             time.sleep(30)
     except KeyboardInterrupt:

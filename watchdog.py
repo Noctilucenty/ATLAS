@@ -16,7 +16,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mission_control import LOGS, PROJECT_DIR, build_status
+from mission_control import LOGS, NO_WINDOW, PROJECT_DIR, build_status
 
 STATE_PATH = LOGS / "watchdog_state.json"
 LOG_PATH = LOGS / "watchdog.log"
@@ -51,6 +51,7 @@ $n = [Windows.UI.Notifications.ToastNotification]::new($doc)
         r = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=30,
+            creationflags=NO_WINDOW,   # no black flash every 15 minutes
         )
         return r.returncode == 0
     except Exception:
