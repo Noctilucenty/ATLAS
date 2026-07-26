@@ -404,6 +404,42 @@ def main() -> int:
                     fh.write(json.dumps(record) + "\n")
                 print(json.dumps(record), flush=True)
                 fired += 1
+            # FULL CROSS-SECTION (2026-07-26). Only signals clearing the
+            # frozen EV gate reach live_h2.jsonl, so no lower gate, wider
+            # universe or different meta threshold can EVER be evaluated on
+            # real-time probabilities - only re-derived from candles, which
+            # loses the leak-immunity that makes the live track valuable.
+            # Recording every asset's probability each cycle makes all of those
+            # variants derivable AFTER the fact from one live run, which is the
+            # only way to evaluate many strategies without trading them, and
+            # without paying a multiplicity cost for hypotheses nobody tested.
+            # Separate file: live_h2.jsonl is a verdict input and is untouched.
+            try:
+                cross = {
+                    "ts": cycle_ts,
+                    "model": model_name,
+                    "rows": [],
+                }
+                for (_, row), p in zip(frame.iterrows(), p_up):
+                    a = row["asset"]
+                    spec_x = INSTRUMENTS[a]
+                    quote_x = profits.get(spec_x.quote_key, {})
+                    pay_x = quote_x.get("binary")
+                    if not isinstance(pay_x, (int, float)) or pay_x <= 0:
+                        pay_x = quote_x.get(spec_x.option_kind)
+                    cross["rows"].append({
+                        "a": a,
+                        "p": round(float(p), 6),
+                        "bar": int(row["to_ts"]),
+                        "pay": float(pay_x) if isinstance(pay_x, (int, float)) else None,
+                        "open": (int(time.time()) - int(row["to_ts"])) < 180,
+                    })
+                with open(log_path.with_name("cross_section.jsonl"), "a") as fh:
+                    fh.write(json.dumps(cross) + "\n")
+            except Exception as exc:  # never let telemetry break trading
+                print(f"WARN cross-section: {type(exc).__name__}: {exc}",
+                      file=sys.stderr, flush=True)
+
             # Heartbeat: an idle cycle and a broken one look identical in the
             # signal log, so record that the model really did evaluate.
             with open(log_path.with_name("live_h2_heartbeat.jsonl"), "a") as fh:
