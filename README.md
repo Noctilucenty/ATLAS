@@ -121,6 +121,28 @@ On demand:
 | `settle_missing.py` | recovers broker verdicts for orders orphaned by a mid-flight crash |
 | `research_payout_landscape.py` | payout stats per (asset, kind) × UTC hour → `logs/payout_landscape.json` |
 | `research_universe_profile.py` | structure profile of candidate instruments → `logs/universe_profile.json` |
+| `forward_eval.py --preflight` | verdict readiness + POWER counts. Reads no outcome, so it does NOT consume the single permitted evaluation — safe to run daily |
+| `probe_run.py` | **the execution probe, one command.** Starts the quote recorder, places N \$1 PRACTICE binaries, waits out the last expiry, settles. Requires `--confirm` |
+| `quote_recorder.py` | samples the live quote every ~2 s → `logs/quotes_<asset>.jsonl`. Needed for settlement-rule attribution |
+| `probe_execution.py` | the probe's phases individually (`--confirm` to place, `--settle-only` to collect) |
+| `research_web.py` | Perplexity search / Advanced Deep Research. Key from gitignored `.env`, never printed |
+| `feature_cache.py` | content-addressed feature cache (`--clear` to drop it) |
+
+### The fidelity measurement (the project's #1 open question)
+`FORWARD_TEST.md` holds that label fidelity — does IQ strike and settle on its
+displayed mid feed, or apply an order-time markup — outranks the forward
+verdict, because a 0.35-pip haircut erases the entire edge. Two ways to get it:
+
+- **Statistically**, from the demo trial's win/loss agreement: ~100 settled
+  trades at ~6/day, so weeks.
+- **Directly**, with `probe_run.py --trades 6 --confirm`: a handful of
+  deliberate trades comparing IQ's own strike against our assumed one.
+
+The direct route needs the quote recorder running, because settlement may not
+be a single closing price — Nadex publishes a rule using the last ten
+pre-expiry midpoints with the top and bottom three discarded. Without
+sub-minute quotes a disagreement cannot be attributed between an averaging
+convention and a real markup, which have opposite consequences.
 
 Shared read-only core: `mission_control.py`.
 
