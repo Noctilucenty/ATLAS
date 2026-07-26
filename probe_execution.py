@@ -286,10 +286,30 @@ def _settle(client, call, rows: list[dict]) -> int:
             # distinction the whole measurement rests on. Pip = 1e-4, or 1e-2
             # for JPY crosses and gold.
             q = record.get("quote_at_order")
+            pip = 0.01 if ("JPY" in record["asset"]
+                           or record["asset"].startswith("XAU")) else 0.0001
             if isinstance(q, (int, float)):
-                pip = 0.01 if ("JPY" in record["asset"]
-                               or record["asset"].startswith("XAU")) else 0.0001
                 out["convention_gap_pips"] = round((strike - q) / pip, 3)
+
+            # ATTRIBUTION: is a disagreement a markup, or just a different
+            # settlement rule? Nadex settles on a trimmed average of the last
+            # ten pre-expiry midpoints, not a single close. If quote_recorder
+            # was running we can compute that label too and compare BOTH
+            # against the broker - which separates an averaging artefact from
+            # an order-time haircut (RESEARCH_QUEUE 2026-07-25).
+            from quote_recorder import read_quotes, trimmed_settlement
+
+            expiry_ts = int(record["signal_bar_to_ts"]) + EXPIRY_MINUTES * 60
+            stream = read_quotes(record["asset"], expiry_ts - 120, expiry_ts)
+            if stream:
+                trimmed = trimmed_settlement([q for _, q in stream])
+                out["expiry_quote_samples"] = len(stream)
+                if trimmed is not None:
+                    out["candle_exercise_trimmed"] = trimmed
+                    out["trimmed_label"] = label_from_prices(
+                        strike, trimmed, record["direction"])
+                    out["settlement_rule_gap_pips"] = round(
+                        (trimmed - exercise) / pip, 3)
         if outcome:
             out["broker_result"], out["broker_profit"] = outcome
             settled += 1
