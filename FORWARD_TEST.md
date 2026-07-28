@@ -525,6 +525,54 @@ candle win rate is executable at all. It is a measurement with no pass/fail
 and is explicitly NOT bound by Rule 2's dates: it continues until it has an
 answer, and a verdict of any kind on H2/H3/H4 does not close it.
 
+## LABEL FIDELITY ANSWERED (2026-07-28) - no markup; the gap was EXPIRY TIMING
+
+The demo trial's first 13 settled orders resolve the measurement this document
+calls the single most important in the project. Result:
+
+| candle label convention | agreement with the broker |
+|---|---|
+| REGISTERED (strike = next bar open, exercise = close 15 bars on) | 10/13 = 76.9% |
+| BROKER'S ACTUAL EXPIRY (quarter-hour snapped) | **13/13 = 100%** |
+
+WHAT HAPPENED. `client.buy(..., 15)` does not create a contract expiring 15
+minutes later. The vendored iqoptionapi/expiration.py builds candidate
+expiries at QUARTER-HOUR boundaries at least 5 minutes out and selects
+whichever is closest to the requested duration. A 15-minute order placed at
+05:09:19 therefore settles at 05:30 - six minutes later than our label
+assumed. Re-scoring the same 13 trades on that expiry explains every
+disagreement, with none left over.
+
+WHY THIS IS THE GOOD OUTCOME. The feared failure mode was an ORDER-TIME
+MARKUP: IQ striking away from its displayed quote, which the SPREAD HAIRCUT
+section showed would drop the win rate 12-15 points, below break-even and
+below a coin flip. That is now positively excluded on this evidence. The
+disagreements were not adverse pricing; they were us scoring a different
+contract from the one traded. Supporting detail: disagreements clustered on
+near-ties (median move 0.65 pips versus 2.10 for agreements), and they ran 1
+in our favour to 2 against - not the one-directional pattern a markup
+produces. Combined with the earlier FEED IDENTIFICATION finding (IQ's line is
+interbank mid within +/-0.05 pips), the execution risk that dominated this
+project's priorities is substantially retired.
+
+WHAT IT COSTS US. The registered label measures a contract we do not trade.
+The forward test remains internally valid - it asks whether the model predicts
+15-bar-ahead direction, scored consistently - but that is 1-7 minutes away
+from the instrument the demo trial actually buys. Consequences:
+- NOTHING registered changes. The hypotheses, gates, models, universe and
+  ALPHA stand exactly as written; this is a measurement, not a criterion.
+- mission_control.label_fidelity now reports BOTH conventions side by side so
+  they can never be silently conflated, and snapped_expiry_ts() is pinned by
+  tests (including the real 05:09 -> 05:30 case).
+- The NEXT registration should label on the snapped expiry, since that is the
+  contract that pays. This is the concrete form of the external research's top
+  recommendation - "change the target, not the model".
+
+CAVEAT, stated plainly: n = 13, and 10 of those already agreed under the old
+convention, so the result rests on 3 flips - all 3 in the predicted direction,
+with a mechanism read directly from the library's source rather than inferred.
+Strong, not yet conclusive. The measurement continues.
+
 ## PREFLIGHT MEASUREMENT (2026-07-25T14:07Z) - counts only, NO outcome read
 
 `forward_eval.py --preflight` gates rows exactly as the real evaluation would

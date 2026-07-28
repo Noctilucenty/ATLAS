@@ -19,7 +19,7 @@ import re
 import sqlite3
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -362,6 +362,32 @@ def journal_counts() -> dict:
 
 # ------------------------------------------------------------ label fidelity
 
+def snapped_expiry_ts(order_ts: int, duration_min: int = 15) -> int:
+    """The bar close-time the BROKER actually settles on.
+
+    client.buy(..., 15) does not create a contract expiring 15 minutes later.
+    The vendored library (iqoptionapi/expiration.py) builds candidate expiries
+    at QUARTER-HOUR boundaries at least 5 minutes out and picks whichever is
+    closest to the requested duration - so a 15-minute request placed at
+    05:09 settles at 05:15 or 05:30, not 05:24. Measured 2026-07-28: scoring
+    the demo trial on this expiry instead of bar+15 raised broker/candle
+    agreement from 10/13 to 13/13.
+
+    Minute-of-hour is timezone-invariant for whole-hour offsets, so working in
+    UTC matches the library's local-time arithmetic. Pure - unit-tested."""
+    now = datetime.fromtimestamp(order_ts, timezone.utc).replace(
+        second=0, microsecond=0)
+    candidates: list[int] = []
+    probe = now
+    while len(candidates) < 8:
+        ts = int(probe.timestamp())
+        if probe.minute % 15 == 0 and (ts - order_ts) > 300:
+            candidates.append(ts)
+        probe += timedelta(minutes=1)
+    target = order_ts + duration_min * 60
+    return min(candidates, key=lambda c: abs(c - target))
+
+
 def _label_bars(bar_to_ts: int) -> tuple[int, int]:
     """(strike bar, exercise bar) close-times for a signal on the bar that
     closed at bar_to_ts, matching the project's REGISTERED label convention
@@ -398,11 +424,12 @@ def label_fidelity(settled: list[dict], ohlc_fn=candle_ohlc) -> dict:
             continue
         strike_bar, exercise_bar = _label_bars(int(r["bar_to_ts"]))
         per_asset_ts.setdefault(spec.candle_asset, set()).update(
-            (strike_bar, exercise_bar))
+            (strike_bar, exercise_bar, snapped_expiry_ts(int(r["ts"]))))
 
     bars = {a: ohlc_fn(a, sorted(ts)) for a, ts in per_asset_ts.items()}
 
     rows, agree, disagree, undetermined = [], 0, 0, 0
+    snap_agree = snap_disagree = 0
     for r in settled:
         asset = r.get("asset")
         spec = INSTRUMENTS.get(asset)
@@ -429,9 +456,32 @@ def label_fidelity(settled: list[dict], ohlc_fn=candle_ohlc) -> dict:
                 agree += 1
             else:
                 disagree += 1
+
+        # SECOND convention: the expiry the broker actually uses (quarter-hour
+        # snapped). Measured 2026-07-28 to explain every disagreement the
+        # registered convention produced. Tracked in parallel so the two can
+        # never be silently conflated.
+        snap_settle = cmap.get(snapped_expiry_ts(int(r["ts"])),
+                               (None, None))[1]
+        snap_label = None
+        if entry is not None and snap_settle is not None:
+            if snap_settle == entry:
+                snap_label = "equal"
+            else:
+                snap_label = ("win"
+                              if (snap_settle > entry)
+                              == (r.get("action") == "binary_call")
+                              else "loose")
+            if broker in ("win", "loose", "equal"):
+                if broker == snap_label:
+                    snap_agree += 1
+                else:
+                    snap_disagree += 1
+
         rows.append({"ts": r.get("ts"), "asset": asset,
                      "action": r.get("action"), "broker": broker or None,
-                     "candle": candle, "profit": r.get("profit")})
+                     "candle": candle, "snapped": snap_label,
+                     "profit": r.get("profit")})
 
     judged = agree + disagree
     return {
@@ -442,6 +492,10 @@ def label_fidelity(settled: list[dict], ohlc_fn=candle_ohlc) -> dict:
         "disagree": disagree,
         "undetermined": undetermined,
         "agreement_rate": round(agree / judged, 4) if judged else None,
+        "snapped_agree": snap_agree,
+        "snapped_disagree": snap_disagree,
+        "snapped_agreement_rate": (round(snap_agree / (snap_agree + snap_disagree), 4)
+                                   if (snap_agree + snap_disagree) else None),
         "target_trades": 100,
         "note": "candle label uses the REGISTERED convention (strike = next "
                 "bar open, exercise = close 15 bars on) on IQ's mid feed; "
