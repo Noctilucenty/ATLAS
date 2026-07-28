@@ -87,6 +87,18 @@ def main() -> None:
     if not args.paper:
         runner_cmd.append("--trade")
 
+    # Backoff for a runner that dies immediately. The commonest cause is the
+    # single-instance socket lock still held by a stray process from a
+    # previous generation: the new runner exits cleanly within a second, and
+    # without backoff this loop respawns it every 30s indefinitely, churning
+    # the broker connection and burying real events in log spam
+    # (observed 2026-07-28).
+    SHORT_RUN_S = 60
+    BACKOFF_START_S = 30
+    BACKOFF_MAX_S = 300
+    backoff = BACKOFF_START_S
+    launched_at = 0.0
+
     try:
         while True:
             now = time.time()
@@ -97,9 +109,19 @@ def main() -> None:
             # Keep exactly one trader alive.
             if runner is None or runner.poll() is not None:
                 if runner is not None:
-                    log(f"runner exited ({runner.returncode}); relaunching")
+                    lived = now - launched_at
+                    log(f"runner exited ({runner.returncode}) after "
+                        f"{lived:.0f}s; relaunching")
+                    if lived < SHORT_RUN_S:
+                        log(f"  short run - backing off {backoff:.0f}s "
+                            "(stray lock holder?)")
+                        time.sleep(backoff)
+                        backoff = min(backoff * 2, BACKOFF_MAX_S)
+                    else:
+                        backoff = BACKOFF_START_S   # healthy session, reset
                 runner = subprocess.Popen(runner_cmd, cwd=PROJECT_DIR,
                                           creationflags=NO_WINDOW)
+                launched_at = time.time()
                 log(f"runner launched pid={runner.pid}")
             time.sleep(30)
     except KeyboardInterrupt:

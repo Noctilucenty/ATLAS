@@ -22,6 +22,47 @@ STATE_PATH = LOGS / "watchdog_state.json"
 LOG_PATH = LOGS / "watchdog.log"
 REALERT_S = 2 * 3600
 DASHBOARD_PORT = 8787
+SUPERVISOR_TASK = "ATLAS-supervisor"
+# Recovery policy. 2026-07-28: the runner wedged mid-cycle, the supervisor
+# waited on a live-but-stuck child forever, and the outage ran 80 minutes
+# because this watchdog could only TOAST. Detection without recovery is not
+# monitoring. Two consecutive CRITICAL checks (~30 min) before acting, so a
+# single transient reading never bounces a healthy trader, and at most one
+# attempt per hour so a genuinely broken system is not restart-looped.
+RECOVERY_AFTER_CONSECUTIVE = 2
+RECOVERY_COOLDOWN_S = 3600
+
+
+def should_attempt_recovery(consecutive_critical: int, now: int,
+                            last_attempt_ts: int) -> bool:
+    """Policy only - pure, unit-tested. Kept separate from the side effects so
+    the decision can be tested without touching Task Scheduler."""
+    if consecutive_critical < RECOVERY_AFTER_CONSECUTIVE:
+        return False
+    return (now - last_attempt_ts) >= RECOVERY_COOLDOWN_S
+
+
+def restart_supervisor() -> tuple[bool, str]:
+    """Stop then start the supervisor task. Returns (ok, detail).
+
+    Deliberately does NOT kill stray processes: that needs elevation the
+    watchdog does not have, and a half-killed tree is worse than a clean
+    retry. If the socket lock is still held by an orphan the new runner exits
+    cleanly and the next cycle tries again - visible in the log either way."""
+    try:
+        stop = subprocess.run(["schtasks", "/end", "/tn", SUPERVISOR_TASK],
+                              capture_output=True, text=True, timeout=60,
+                              creationflags=NO_WINDOW)
+        time.sleep(5)
+        start = subprocess.run(["schtasks", "/run", "/tn", SUPERVISOR_TASK],
+                               capture_output=True, text=True, timeout=60,
+                               creationflags=NO_WINDOW)
+        ok = start.returncode == 0
+        detail = (f"stop rc={stop.returncode} start rc={start.returncode}"
+                  + ("" if ok else f" :: {(start.stderr or start.stdout).strip()[:120]}"))
+        return ok, detail
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 def log(msg: str) -> None:
@@ -128,6 +169,8 @@ def _run() -> int:
     last_alert = state.get("last_alert_ts", 0)
 
     if tier == "CRITICAL":
+        consecutive = int(state.get("consecutive_critical", 0)) + 1
+        state["consecutive_critical"] = consecutive
         if prev_tier != "CRITICAL" or now - last_alert >= REALERT_S:
             ok = toast("ATLAS CRITICAL - trader down",
                        "; ".join(reasons)[:180] or "unknown")
@@ -137,9 +180,22 @@ def _run() -> int:
             # hide the outage indefinitely (audit 2026-07-24).
             if ok:
                 state["last_alert_ts"] = now
-    elif prev_tier == "CRITICAL":
-        toast("ATLAS recovered", "health back to " + tier)
-        log("recovery alert sent")
+
+        # ACT, do not just complain.
+        if should_attempt_recovery(consecutive, now,
+                                   int(state.get("last_recovery_ts", 0))):
+            state["last_recovery_ts"] = now
+            ok, detail = restart_supervisor()
+            log(f"RECOVERY attempted after {consecutive} critical checks "
+                f"({'ok' if ok else 'FAILED'}): {detail}")
+            toast("ATLAS recovery attempted",
+                  ("supervisor restarted" if ok else "restart FAILED - "
+                   "a stray process may need an elevated kill")[:180])
+    else:
+        state["consecutive_critical"] = 0
+        if prev_tier == "CRITICAL":
+            toast("ATLAS recovered", "health back to " + tier)
+            log("recovery alert sent")
 
     ensure_dashboard()
 
