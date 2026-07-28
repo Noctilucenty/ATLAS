@@ -90,7 +90,12 @@ def index_closed_options(payload) -> dict[int, tuple[str, float]]:
 
 # Field names a position entry might use for the outcome and the money.
 _WIN_KEYS = ("close_reason", "win", "status")
-_PNL_KEYS = ("pnl_realized", "pnl", "profit", "close_profit")
+# VERIFIED against real settled positions 2026-07-28: for a $1 binary at 0.88
+# payout, pnl / pnl_net / pnl_realized all read 0.88 on a win and -1 on a loss,
+# which matches the runner's own convention. close_profit is the GROSS 1.88
+# (stake returned plus profit) and must never be read as profit - it is listed
+# last only as a desperate fallback and would need halving-style correction.
+_PNL_KEYS = ("pnl", "pnl_net", "pnl_realized", "profit")
 _ID_KEYS = ("external_id", "order_ids", "raw_event_id", "id")
 
 
@@ -184,13 +189,25 @@ def main() -> int:
             print(f"WARN position_history_v2 {instrument_type}: "
                   f"{type(exc).__name__}", file=sys.stderr)
 
-    # Secondary: the v1 option info (v2 times out on this account).
+    # Secondary: the v1 option info, used ONLY to fill gaps.
+    #
+    # Precedence matters and got this wrong once (2026-07-28): v1's fields were
+    # allowed to overwrite position_history_v2 and recorded a $1 win as +1.76
+    # instead of +0.88. position_history_v2 is the VERIFIED source - its pnl,
+    # pnl_net and pnl_realized all read 0.88 for a $1 win at 0.88 payout, while
+    # close_profit is the gross 1.88 including the returned stake. So v1 may
+    # only supply ids v2 did not return.
     try:
         payload = _call(client.get_optioninfo, args.limit, timeout=60)
         raw["optioninfo_v1"] = payload
         found = index_closed_options(payload)
-        verdicts.update(found)
-        print(f"optioninfo v1: {len(found)} closed option id(s)")
+        added = 0
+        for oid, outcome in found.items():
+            if oid not in verdicts:
+                verdicts[oid] = outcome
+                added += 1
+        print(f"optioninfo v1: {len(found)} closed option id(s), "
+              f"{added} used to fill gaps")
     except Exception as exc:
         print(f"WARN optioninfo v1: {type(exc).__name__}", file=sys.stderr)
 
