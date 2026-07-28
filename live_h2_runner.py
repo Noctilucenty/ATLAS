@@ -34,6 +34,14 @@ PROJECT_DIR = Path(__file__).resolve().parent
 CANDLE_COUNT = 560  # covers REGIME_WINDOW=480 warmup plus slack
 EV_MARGIN = 0.03    # FORWARD_TEST.md hypothesis #2 primary gate - do not tune
 REGISTERED_CUTOFF_TS = 1784678400  # 2026-07-22T00:00:00Z, FORWARD_TEST.md
+# A healthy cycle finishes in seconds. Observed 2026-07-28: the runner wedged
+# for 20+ minutes at 0% CPU with no exception, no log line and no _call
+# timeout firing - blocked inside the vendored library somewhere the daemon-
+# thread timeout could not reach. Only the supervisor's 57-minute relaunch
+# recovered it, losing a market-hours session. This deadline bounds ANY hang,
+# whatever its cause, to a couple of minutes.
+CYCLE_DEADLINE_S = 300
+_LAST_PROGRESS = 0.0  # epoch of the last completed cycle step
 EXPIRY_MINUTES = 15
 TRADE_AMOUNT = 1.0
 _LOCK_SOCK = None  # single-instance lock socket, bound in main()
@@ -59,6 +67,33 @@ def _call(fn, *args, timeout=60, **kwargs):
     if "error" in box:
         raise box["error"]
     return box["value"]
+
+
+def _note_progress() -> None:
+    """Mark the cycle loop as alive. Called at each step the loop reaches."""
+    global _LAST_PROGRESS
+    _LAST_PROGRESS = time.time()
+
+
+def _start_cycle_watchdog(deadline_s: int = CYCLE_DEADLINE_S) -> None:
+    """Force a relaunch if the cycle loop stops making progress.
+
+    Deliberately uses os._exit: the main thread is, by definition, blocked
+    somewhere uninterruptible when this fires, so sys.exit or an exception
+    would never be delivered. That skips settle_open_orders, but an order left
+    open is recoverable later with settle_missing.py, whereas a wedged runner
+    silently stops trading until the hourly relaunch."""
+    def watch():
+        while True:
+            time.sleep(30)
+            if _LAST_PROGRESS and time.time() - _LAST_PROGRESS > deadline_s:
+                stalled = int(time.time() - _LAST_PROGRESS)
+                print(f"CYCLE WATCHDOG: no progress for {stalled}s "
+                      f"(deadline {deadline_s}s) - forcing relaunch",
+                      file=sys.stderr, flush=True)
+                os._exit(1)
+
+    threading.Thread(target=watch, daemon=True).start()
 
 
 def _load_env() -> None:
@@ -301,10 +336,14 @@ def main() -> int:
     open_orders = []
     consecutive_failures = 0
 
+    _note_progress()
+    _start_cycle_watchdog()
+
     while time.time() < deadline:
         # Wait for the next minute boundary + 2s so the bar is fully closed.
         time.sleep(max(0.0, 60 - time.time() % 60) + 2)
         cycle_ts = int(time.time())
+        _note_progress()
         try:
             frame = latest_feature_rows(client, horizon, basket)
             if frame.empty:
