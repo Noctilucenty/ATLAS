@@ -23,6 +23,7 @@ Flags:
 import argparse
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,13 +100,30 @@ def main() -> None:
     backoff = BACKOFF_START_S
     launched_at = 0.0
 
+    collector_thread: threading.Thread | None = None
+
     try:
         while True:
             now = time.time()
-            # Collection on schedule.
+            # Collection on schedule, in the BACKGROUND.
+            #
+            # 2026-07-28: collect_cycle ran inline with a 1200s subprocess
+            # timeout. A hung collector therefore froze this loop for twenty
+            # minutes, during which a wedged runner could not be relaunched -
+            # turning a runner hang into a 74-minute trading outage. Keeping
+            # the trader alive outranks collecting candles, and a missed
+            # collection is repaired by catchup_gaps within hours, whereas a
+            # missed trading minute is gone for good.
             if now - last_collect >= args.collect_min * 60:
-                collect_cycle()
-                last_collect = now
+                if collector_thread is not None and collector_thread.is_alive():
+                    log("previous collection still running - skipping this "
+                        "cycle (catchup_gaps will heal any hole)")
+                    last_collect = now
+                else:
+                    collector_thread = threading.Thread(
+                        target=collect_cycle, daemon=True)
+                    collector_thread.start()
+                    last_collect = now
             # Keep exactly one trader alive.
             if runner is None or runner.poll() is not None:
                 if runner is not None:
