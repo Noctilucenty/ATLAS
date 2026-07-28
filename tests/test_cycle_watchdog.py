@@ -60,5 +60,8 @@ def test_watchdog_uses_hard_exit_not_sys_exit():
     import inspect
 
     src = inspect.getsource(r._start_cycle_watchdog)
-    assert "os._exit" in src
-    assert "sys.exit" not in src
+    # Strip the docstring: it explains WHY sys.exit is unusable here, so
+    # scanning the whole source would match its own explanation.
+    body = src.split('"""')[-1]
+    assert "os._exit" in body
+    assert "sys.exit" not in body
