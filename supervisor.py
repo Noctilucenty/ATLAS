@@ -74,12 +74,44 @@ def collect_cycle() -> None:
         log(f"collect cycle error: {type(exc).__name__}: {exc}")
 
 
+SUPERVISOR_LOCK_PORT = 47202  # runner uses 47201
+_LOCK_SOCK = None  # bound for the process lifetime in main()
+
+
+def acquire_singleton_lock(port: int = SUPERVISOR_LOCK_PORT):
+    """Bind a localhost port for the process lifetime, or return None.
+
+    The runner has had this since the fcntl->socket port; the supervisor never
+    did, and 2026-07-29 showed why it needs one. Task Scheduler can lose track
+    of a running supervisor (a `schtasks /run` that IgnoreNew rejects leaves
+    the task 'Ready' while the real process keeps going), after which any
+    recovery attempt - including watchdog.py's - would start a SECOND
+    supervisor. Two supervisors mean duplicate collection and runner churn.
+    The OS releases this on exit or crash, so there is no stale lockfile."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        sock.close()
+        return None
+    return sock
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--paper", action="store_true",
                     help="run the trader without --trade (log only, place nothing)")
     ap.add_argument("--collect-min", type=int, default=60)
     args = ap.parse_args()
+
+    # Refuse to be the second supervisor. Held for the process lifetime.
+    global _LOCK_SOCK
+    _LOCK_SOCK = acquire_singleton_lock()
+    if _LOCK_SOCK is None:
+        log("another supervisor already holds the lock - exiting cleanly")
+        return
 
     log(f"supervisor start (python={PYTHON}, trade={'off' if args.paper else 'on'})")
     last_collect = 0.0
