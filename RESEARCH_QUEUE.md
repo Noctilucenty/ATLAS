@@ -167,6 +167,36 @@ for confidence, and that the whole policy including asset choice should be
 evaluated per timestamp. Directly relevant: our max_conf dashboard metric is
 exactly that maximum.
 
+## OUT-OF-UNIVERSE TRADING - prediction, then evidence (2026-07-29)
+
+The audit predicted this before the trades existed: ~60% of live signals fire
+on instruments OUTSIDE the deployed bundle's meta['assets'] (the frozen 16),
+where the model has no validated edge and the registered verdict excludes them
+anyway. First settled demo orders, split on exactly that boundary:
+
+| universe | n | wins | win rate | net |
+|---|---|---|---|---|
+| IN frozen-16 (EURUSD, EURJPY, USDJPY) | 11 | 7 | 63.6% | +2.16 |
+| OUTSIDE (EURGBP, XAUUSD) | 6 | 1 | 16.7% | -4.13 |
+
+The whole demo drawdown (-1.97 net overall) comes from the out-of-universe
+bucket. Three of those six were XAUUSD puts placed within five minutes of each
+other, so they are roughly one independent observation, not three - the real
+counts are perhaps 4-5 independent in-universe and 3-4 outside. At that size
+neither rate is significant on its own.
+
+What IS meaningful is that the direction was predicted in advance from the
+model's training manifest, not fitted afterwards. Gold in particular is a
+different asset class the pooled FX model never saw.
+
+CONSEQUENCE: strengthens item 8 (frozen-universe-only policy) from "natural
+candidate" to the leading change for the next registration. Deliberately NOT
+applied now - the instrument universe is frozen for this window, and narrowing
+it mid-test would be exactly the kind of mid-flight change the pre-registration
+forbids. It is also worth noting that any real-money decision taken on the
+blended demo P/L would be misled twice over: by the untradeable rollover
+signals and by the out-of-universe losses.
+
 ## Standing constraints
 
 - One machine per account; Windows host owns the demo account now.
