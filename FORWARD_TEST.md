@@ -525,6 +525,50 @@ candle win rate is executable at all. It is a measurement with no pass/fail
 and is explicitly NOT bound by Rule 2's dates: it continues until it has an
 answer, and a verdict of any kind on H2/H3/H4 does not close it.
 
+## TRADEABILITY CONCENTRATION (2026-07-29) - the headline win rate is not executable
+
+Measured over 259 live signals. Order acceptance by UTC hour:
+
+| hour | signals | orders placed | conversion |
+|---|---|---|---|
+| 02, 06, 11 | 11 | 11 | 100% |
+| 05 | 11 | 3 | 27% |
+| **20-21 (FX rollover)** | **214** | **0** | **0%** |
+| other | 23 | 0 | 0% |
+| TOTAL | 259 | 14 | **5.4%** |
+
+**64% of all gated signals fire in hour 21Z alone**, and IQ's binary books are
+shut across 20-21Z, so not one of them could be executed. Splitting the scored
+outcomes on that boundary:
+
+| bucket | n | promised | realized |
+|---|---|---|---|
+| rollover 20-21Z (UNTRADEABLE) | 207 | 0.5637 | **73.4%** |
+| tradeable hours | 45 | 0.5540 | **53.3%** |
+
+Break-even is 53.5%. So the encouraging blended figure (69.8%) is produced
+almost entirely by signals the broker will not accept, while the executable
+subset sits marginally BELOW break-even.
+
+INTERPRETATION, held loosely: n=45 tradeable signals cannot distinguish 53.3%
+from 53.5%, so this is not evidence the edge is absent. But it does mean the
+blended number is not evidence the edge is PRESENT either, and the mechanism
+is plausible - at the daily rollover liquidity thins, spreads widen and quotes
+behave unusually, which is exactly the regime where a 1-minute model can find
+"movement" that is an artefact rather than a tradeable signal.
+
+CONSEQUENCES:
+- Any real-money expectation built on the blended rate would be badly wrong.
+  The executable sample is 45 signals and 14 orders, not 259.
+- The candles track will score mostly rollover bars, so the registered verdict
+  measures a population that is largely unexecutable. This does NOT change any
+  registered criterion - the hypotheses stand as written - but the verdict
+  must be read alongside this table.
+- tail_calibration.py now always prints the split and flags the tradeable row
+  when it falls below break-even, so the blend can never be quoted alone.
+- Candidate for the NEXT registration: restrict signal generation, or at least
+  order placement, to hours when the books are actually open.
+
 ## LABEL FIDELITY ANSWERED (2026-07-28) - no markup; the gap was EXPIRY TIMING
 
 The demo trial's first 13 settled orders resolve the measurement this document

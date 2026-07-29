@@ -29,6 +29,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
+# The FX daily rollover. IQ's binary books are shut here, so signals in these
+# hours are scoreable but NOT executable (measured 2026-07-29: 0/214 orders
+# accepted at 20-21Z versus 14/45 elsewhere).
+ROLLOVER_HOURS = (20, 21)
 
 
 def confidence(p: float) -> float:
@@ -140,10 +144,21 @@ def main() -> int:
             "won": bool(won),
             "day": datetime.fromtimestamp(int(s["ts"]), timezone.utc)
                            .strftime("%Y-%m-%d"),
+            "hour": datetime.fromtimestamp(int(s["ts"]), timezone.utc).hour,
         })
+
+    # TRADEABILITY SPLIT (2026-07-29). 64% of gated signals fire in the
+    # 20-21Z FX rollover, when the binary books are SHUT - they are scored
+    # here but could never be executed. Reporting one blended number hid a
+    # 73.4% untradeable bucket propping up a 53.3% tradeable one, which is
+    # below the 53.5% break-even. Never report the blend alone again.
+    roll = [r for r in rows if r["hour"] in ROLLOVER_HOURS]
+    trad = [r for r in rows if r["hour"] not in ROLLOVER_HOURS]
 
     out = calibration_gap(rows)
     out["unresolved"] = unresolved
+    out["rollover_20_21z"] = calibration_gap(roll)
+    out["tradeable_hours"] = calibration_gap(trad)
     out["ev_gate"] = args.ev
     out["label"] = "snapped (broker expiry)" if args.snapped else "registered (bar+15)"
     out["universe"] = "frozen16" if args.frozen_only else "all"
@@ -174,8 +189,22 @@ def main() -> int:
           + ("(overconfident tail)" if out["gap"] < 0 else "(honest or better)"))
     print(f"  break-even @0.87 : {out['breakeven_at_0.87']}"
           f"   EV/stake at realized: {out['ev_per_stake_at_realized']:+.4f}")
+    # The blended number above is misleading on its own - print the split.
+    for name, key in (("rollover 20-21Z (UNTRADEABLE)", "rollover_20_21z"),
+                      ("tradeable hours", "tradeable_hours")):
+        b = out[key]
+        if b["n"]:
+            flag = ""
+            if key == "tradeable_hours" and b["realized"] is not None:
+                flag = ("  <-- BELOW BREAK-EVEN"
+                        if b["realized"] < out["breakeven_at_0.87"] else "")
+            print(f"  {name:30s} n={b['n']:4d}  promised {b['promised']:.4f}"
+                  f"  realized {b['realized']:.4f}{flag}")
+
     print("\n  NOTE: research output, not a pre-registered verdict. The gap - "
-          "not global Brier skill - is what makes the gate's promise true.")
+          "not global Brier skill - is what makes the gate's promise true.\n"
+          "  The blended rate is dominated by rollover-hour signals the broker "
+          "will not accept; only the tradeable row is executable.")
     return 0
 
 
