@@ -167,35 +167,62 @@ for confidence, and that the whole policy including asset choice should be
 evaluated per timestamp. Directly relevant: our max_conf dashboard metric is
 exactly that maximum.
 
-## OUT-OF-UNIVERSE TRADING - prediction, then evidence (2026-07-29)
+## OUT-OF-UNIVERSE TRADING - a prediction the data does NOT yet confirm
 
-The audit predicted this before the trades existed: ~60% of live signals fire
-on instruments OUTSIDE the deployed bundle's meta['assets'] (the frozen 16),
-where the model has no validated edge and the registered verdict excludes them
-anyway. First settled demo orders, split on exactly that boundary:
+Superseded 2026-07-29 at n=20. An earlier revision of this section (commit
+55818c6, written at n=17) claimed the demo record confirmed a frozen-universe
+effect. It does not. Both the numbers and the conclusion are corrected below;
+the retraction is kept in place rather than deleted, because the way this
+finding fell apart is itself the lesson.
 
-| universe | n | wins | win rate | net |
-|---|---|---|---|---|
-| IN frozen-16 (EURUSD, EURJPY, USDJPY) | 11 | 7 | 63.6% | +2.16 |
-| OUTSIDE (EURGBP, XAUUSD) | 6 | 1 | 16.7% | -4.13 |
+THE A PRIORI ARGUMENT (unchanged, and still the reason item 8 exists):
+~60% of live signals fire on instruments OUTSIDE the deployed bundle's
+meta['assets'] (the frozen 16). The model has no validated edge there and the
+registered candles verdict excludes them. That is a MODELLING argument - it
+stands on its own and needs no live evidence to support it.
 
-The whole demo drawdown (-1.97 net overall) comes from the out-of-universe
-bucket. Three of those six were XAUUSD puts placed within five minutes of each
-other, so they are roughly one independent observation, not three - the real
-counts are perhaps 4-5 independent in-universe and 3-4 outside. At that size
-neither rate is significant on its own.
+THE LIVE NUMBERS at n=20 settled (2 days, 07-28/07-29):
 
-What IS meaningful is that the direction was predicted in advance from the
-model's training manifest, not fitted afterwards. Gold in particular is a
-different asset class the pooled FX model never saw.
+| universe | n | wins | win rate | net | days |
+|---|---|---|---|---|---|
+| ALL | 20 | 11 | 55.0% | +0.64 | 07-28, 07-29 |
+| IN frozen-16 | 11 | 7 | 63.6% | +2.16 | 07-28 ONLY |
+| OUTSIDE | 9 | 4 | 44.4% | -1.52 | 07-28, 07-29 |
 
-CONSEQUENCE: strengthens item 8 (frozen-universe-only policy) from "natural
-candidate" to the leading change for the next registration. Deliberately NOT
-applied now - the instrument universe is frozen for this window, and narrowing
-it mid-test would be exactly the kind of mid-flight change the pre-registration
-forbids. It is also worth noting that any real-money decision taken on the
-blended demo P/L would be misled twice over: by the untradeable rollover
-signals and by the out-of-universe losses.
+Per asset: EURUSD (IN) 7/8 +5.16 | XAUUSD (OUT) 3/6 -0.39 |
+EURGBP (OUT) 1/3 -1.13 | USDJPY (IN) 0/2 -2.00 | EURJPY (IN) 0/1 -1.00
+
+WHY THIS CONFIRMS NOTHING - three defects, any one of which is disqualifying:
+
+1. CONFOUNDED WITH DAY. Every in-universe trade landed on 07-28; the
+   out-of-universe trades span both days. "In-universe wins more" is therefore
+   indistinguishable from "07-28 was a good day". The grouping variable is
+   perfectly correlated with a nuisance variable, so the split cannot be read
+   as a universe effect at all.
+2. IT IS ONE ASSET, NOT ELEVEN TRADES. EURUSD alone carries the whole
+   in-universe result at 7/8. The other two in-universe pairs are 0/3
+   combined. Strip EURUSD and the in-universe bucket is 0/3.
+3. IT ALREADY SWUNG VIOLENTLY. At n=17 the outside bucket read 16.7% / -4.13;
+   three trades later it reads 44.4% / -1.52, and overall net crossed from
+   -1.97 to +0.64. The n=17 revision called that bucket a confirmed drawdown.
+   It was three correlated XAUUSD puts placed inside five minutes - roughly one
+   observation - and it evaporated. This is the small-n instability the caveat
+   warned about, demonstrated on our own data.
+
+CONSEQUENCE: item 8 stays where it was - a natural candidate for the NEXT
+registration, justified by the modelling argument above and NOT by this
+sample. It is not promoted. Still deliberately not applied now: the instrument
+universe is frozen for this window and narrowing it mid-test is exactly the
+mid-flight change the pre-registration forbids.
+
+The one claim that survives intact: a real-money decision taken on blended
+demo P/L would be misled, because 64% of gated signals fire in the 20-21Z
+rollover when the books are shut (see the tradeability split above). That
+finding rests on 0/214 versus 14/45 order acceptances, not on 20 settlements.
+
+STANDING LESSON: do not write "prediction confirmed" from a two-day, one-asset
+sample. Check the grouping variable against day and asset concentration FIRST -
+if either explains the split, there is no finding to report.
 
 ## Standing constraints
 
